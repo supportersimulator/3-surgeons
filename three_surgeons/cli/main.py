@@ -13,7 +13,7 @@ import yaml
 from three_surgeons.core.config import Config
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.models import LLMProvider
-from three_surgeons.core.state import MemoryBackend
+from three_surgeons.core.state import create_backend_from_config
 
 
 @click.group()
@@ -120,7 +120,7 @@ def cross_exam(ctx: click.Context, topic: str) -> None:
     from three_surgeons.core.cross_exam import SurgeryTeam
 
     config: Config = ctx.obj["config"]
-    state = MemoryBackend()
+    state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
     neuro = LLMProvider(config.neurologist)
@@ -158,7 +158,7 @@ def consult(ctx: click.Context, topic: str) -> None:
     from three_surgeons.core.cross_exam import SurgeryTeam
 
     config: Config = ctx.obj["config"]
-    state = MemoryBackend()
+    state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
     neuro = LLMProvider(config.neurologist)
@@ -192,7 +192,7 @@ def consensus(ctx: click.Context, claim: str) -> None:
     from three_surgeons.core.cross_exam import SurgeryTeam
 
     config: Config = ctx.obj["config"]
-    state = MemoryBackend()
+    state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
     neuro = LLMProvider(config.neurologist)
@@ -250,7 +250,7 @@ def gains_gate(ctx: click.Context) -> None:
     from three_surgeons.core.gates import GainsGate
 
     config: Config = ctx.obj["config"]
-    state = MemoryBackend()
+    state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     gate = GainsGate(state=state, evidence=evidence, config=config)
 
@@ -279,7 +279,7 @@ def neurologist_pulse_cmd(ctx: click.Context) -> None:
 
     config: Config = ctx.obj["config"]
     neuro = LLMProvider(config.neurologist)
-    state = MemoryBackend()
+    state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
 
     click.echo("Running neurologist pulse...\n")
@@ -411,7 +411,7 @@ def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str) -> None:
     from three_surgeons.core.cross_exam import SurgeryTeam
 
     config: Config = ctx.obj["config"]
-    state = MemoryBackend()
+    state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
     neuro = LLMProvider(config.neurologist)
@@ -447,7 +447,7 @@ def ab_validate_cmd(ctx: click.Context, description: str) -> None:
     from three_surgeons.core.cross_exam import SurgeryTeam
 
     config: Config = ctx.obj["config"]
-    state = MemoryBackend()
+    state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
     neuro = LLMProvider(config.neurologist)
@@ -509,7 +509,7 @@ def ab_propose(
     from three_surgeons.core.ab_testing import ABTestEngine
 
     config: Config = ctx.obj["config"]
-    state = MemoryBackend()
+    state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     engine = ABTestEngine(evidence=evidence, state=state, config=config)
 

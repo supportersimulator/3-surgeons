@@ -353,3 +353,27 @@ def create_backend(backend_type: str = "memory", **kwargs: str) -> StateBackend:
             return SQLiteBackend(db_path=kwargs.get("db_path", "~/.3surgeons/state.db"))
     else:
         raise ValueError(f"Unknown backend type: {backend_type!r}")
+
+
+def create_backend_from_config(state_config: "StateConfig") -> StateBackend:
+    """Create a state backend from a StateConfig object.
+
+    Uses the StateConfig's backend field to determine which backend to create.
+    Falls back to SQLite if Redis package is not installed.
+    """
+    from three_surgeons.core.config import StateConfig  # avoid circular import
+
+    backend = state_config.backend
+    if backend == "memory":
+        return MemoryBackend()
+    elif backend == "sqlite":
+        path = str(state_config.resolved_sqlite_path)
+        return SQLiteBackend(db_path=path)
+    elif backend == "redis":
+        try:
+            return _RedisBackend(url=state_config.redis_url)
+        except ImportError:
+            path = str(state_config.resolved_sqlite_path)
+            return SQLiteBackend(db_path=path)
+    else:
+        raise ValueError(f"Unknown backend: {backend!r}")
