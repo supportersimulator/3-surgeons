@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# 3-Surgeons Session Start Hook
+# Injects the using-3-surgeons skill into the session context
+
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SKILL_FILE="${PLUGIN_ROOT}/skills/using-3-surgeons/SKILL.md"
+
+if [ ! -f "$SKILL_FILE" ]; then
+    echo '{"additionalContext": "3-Surgeons plugin installed but skill file not found."}'
+    exit 0
+fi
+
+SKILL_CONTENT=$(cat "$SKILL_FILE")
+
+# Output JSON with the skill content wrapped in importance tags
+cat <<EOF
+{"additionalContext": "<EXTREMELY_IMPORTANT>\nYou have 3-Surgeons installed.\n\n${SKILL_CONTENT}\n</EXTREMELY_IMPORTANT>"}
+EOF
