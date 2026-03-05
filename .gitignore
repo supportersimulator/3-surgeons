@@ -6,3 +6,28 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
+
+# Secrets — NEVER commit
+*.env
+.env.*
+!.env.example
+secrets.yaml
+secrets.yml
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+config/secrets.*
+!config/3surgeons.example.yaml
+~/.3surgeons/
+
+# User config (may contain env var values)
+3surgeons.yaml
+.3surgeons.yaml
+
+# State/evidence databases
+*.db
+*.db-wal
+*.db-shm
+gpu.lock
