@@ -68,6 +68,20 @@ class GatesConfig:
 
 
 @dataclass
+class StateConfig:
+    """State backend configuration."""
+
+    backend: str = "sqlite"  # sqlite | redis | memory
+    sqlite_path: str = "~/.3surgeons/state.db"
+    redis_url: str = "redis://localhost:6379/0"
+
+    @property
+    def resolved_sqlite_path(self) -> Path:
+        """Return sqlite_path with ~ expanded."""
+        return Path(self.sqlite_path).expanduser()
+
+
+@dataclass
 class Config:
     """Top-level configuration for the 3-Surgeons system.
 
@@ -92,6 +106,7 @@ class Config:
     budgets: BudgetConfig = field(default_factory=BudgetConfig)
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
     gates: GatesConfig = field(default_factory=GatesConfig)
+    state: StateConfig = field(default_factory=StateConfig)
     gpu_lock_path: Optional[str] = None
 
     @classmethod
@@ -158,6 +173,10 @@ class Config:
         gates_raw = raw.get("gates", {})
         if isinstance(gates_raw, dict):
             cfg.gates = _merge_dataclass(cfg.gates, gates_raw)
+
+        state_raw = raw.get("state", {})
+        if isinstance(state_raw, dict):
+            cfg.state = _merge_dataclass(cfg.state, state_raw)
 
         return cfg
 
