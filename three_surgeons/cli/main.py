@@ -5,13 +5,12 @@ Entry points: main() function and cli click group.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import click
 import yaml
 
-from three_surgeons.core.config import Config, SurgeonConfig
+from three_surgeons.core.config import Config
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.models import LLMProvider
 from three_surgeons.core.state import MemoryBackend
