@@ -24,6 +24,7 @@ class ComplexityVector:
         id: Unique identifier (e.g., "CV-001").
         name: Human-readable name (e.g., "Authentication complexity").
         keywords: Terms to search for in content.
+        category: Classification: structural, operational, resource, or identity.
         risk_score: Severity weight 0.0-1.0.
         noise_threshold: Max keyword hits before vector is discarded as noise.
             Hits > this value are too noisy to be meaningful.
@@ -32,7 +33,8 @@ class ComplexityVector:
     id: str
     name: str
     keywords: List[str]
-    risk_score: float
+    category: str = "operational"
+    risk_score: float = 0.5
     noise_threshold: int = 6
 
 
@@ -61,52 +63,104 @@ class SentinelResult:
 
 DEFAULT_VECTORS: List[ComplexityVector] = [
     ComplexityVector(
-        id="CV-001",
-        name="Authentication complexity",
+        id="CV-001", name="Authentication complexity",
         keywords=["auth", "token", "jwt", "oauth", "session"],
-        risk_score=0.7,
+        category="structural", risk_score=0.7,
     ),
     ComplexityVector(
-        id="CV-002",
-        name="Database schema changes",
+        id="CV-002", name="Database schema changes",
         keywords=["migration", "schema", "alter table", "index"],
-        risk_score=0.6,
+        category="structural", risk_score=0.6,
     ),
     ComplexityVector(
-        id="CV-003",
-        name="API surface changes",
+        id="CV-003", name="API surface changes",
         keywords=["endpoint", "route", "api", "rest", "graphql"],
-        risk_score=0.5,
+        category="operational", risk_score=0.5,
     ),
     ComplexityVector(
-        id="CV-004",
-        name="Security concerns",
+        id="CV-004", name="Security concerns",
         keywords=["injection", "xss", "csrf", "vulnerability", "exploit"],
-        risk_score=0.9,
+        category="structural", risk_score=0.9,
     ),
     ComplexityVector(
-        id="CV-005",
-        name="Performance impact",
+        id="CV-005", name="Performance impact",
         keywords=["cache", "latency", "throughput", "bottleneck", "n+1"],
-        risk_score=0.6,
+        category="resource", risk_score=0.6,
     ),
     ComplexityVector(
-        id="CV-006",
-        name="Concurrency issues",
+        id="CV-006", name="Concurrency issues",
         keywords=["lock", "mutex", "race condition", "deadlock", "thread"],
-        risk_score=0.8,
+        category="resource", risk_score=0.8,
     ),
     ComplexityVector(
-        id="CV-007",
-        name="External dependencies",
+        id="CV-007", name="External dependencies",
         keywords=["api key", "third-party", "vendor", "sdk", "external"],
-        risk_score=0.5,
+        category="operational", risk_score=0.5,
     ),
     ComplexityVector(
-        id="CV-008",
-        name="State management",
+        id="CV-008", name="State management",
         keywords=["state", "redux", "context", "global", "singleton"],
-        risk_score=0.4,
+        category="operational", risk_score=0.4,
+    ),
+    ComplexityVector(
+        id="CV-009", name="Redundant agents",
+        keywords=["agent", "duplicate", "overlap", "redundant"],
+        category="structural", risk_score=0.6,
+    ),
+    ComplexityVector(
+        id="CV-010", name="Container name variants",
+        keywords=["container", "docker", "naming", "alias"],
+        category="identity", risk_score=0.5,
+    ),
+    ComplexityVector(
+        id="CV-011", name="API domain sprawl",
+        keywords=["api", "endpoint", "domain", "route", "sprawl"],
+        category="operational", risk_score=0.65,
+    ),
+    ComplexityVector(
+        id="CV-012", name="Action fragmentation",
+        keywords=["action", "handler", "dispatch", "fragment"],
+        category="structural", risk_score=0.55,
+    ),
+    ComplexityVector(
+        id="CV-013", name="Identity alias confusion",
+        keywords=["alias", "rename", "identity", "mapping"],
+        category="identity", risk_score=0.6,
+    ),
+    ComplexityVector(
+        id="CV-014", name="Message broker complexity",
+        keywords=["queue", "broker", "pubsub", "event bus"],
+        category="operational", risk_score=0.7,
+    ),
+    ComplexityVector(
+        id="CV-015", name="Scheduler proliferation",
+        keywords=["scheduler", "cron", "timer", "job", "interval"],
+        category="resource", risk_score=0.65,
+    ),
+    ComplexityVector(
+        id="CV-ES", name="Error swallowing",
+        keywords=["except", "pass", "silent", "ignore", "swallow"],
+        category="operational", risk_score=0.8,
+    ),
+    ComplexityVector(
+        id="CV-TSD", name="Temporal state drift",
+        keywords=["stale", "expired", "drift", "sync", "clock"],
+        category="operational", risk_score=0.75,
+    ),
+    ComplexityVector(
+        id="CV-FLC", name="Feedback loop contamination",
+        keywords=["feedback", "loop", "circular", "recursive", "self-reference"],
+        category="structural", risk_score=0.85,
+    ),
+    ComplexityVector(
+        id="CV-PVS", name="Python version skew",
+        keywords=["version", "compat", "deprecated", "legacy", "python"],
+        category="operational", risk_score=0.55,
+    ),
+    ComplexityVector(
+        id="CV-SCC", name="SQLite connection chaos",
+        keywords=["sqlite", "connection", "lock", "concurrent", "wal"],
+        category="resource", risk_score=0.7,
     ),
 ]
 

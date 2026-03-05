@@ -268,6 +268,227 @@ def gains_gate(ctx: click.Context) -> None:
         ctx.exit(1)
 
 
+# -- neurologist-pulse -------------------------------------------------------
+
+
+@cli.command("neurologist-pulse")
+@click.pass_context
+def neurologist_pulse_cmd(ctx: click.Context) -> None:
+    """System health pulse check via neurologist."""
+    from three_surgeons.core.neurologist import neurologist_pulse
+
+    config: Config = ctx.obj["config"]
+    neuro = LLMProvider(config.neurologist)
+    state = MemoryBackend()
+    evidence = EvidenceStore(str(config.evidence.resolved_path))
+
+    click.echo("Running neurologist pulse...\n")
+    result = neurologist_pulse(
+        neuro, state_backend=state, evidence_store=evidence,
+        gpu_lock_path=config.gpu_lock_path,
+    )
+
+    for name, check in result.checks.items():
+        status = "OK" if check.ok else "FAIL"
+        latency = f" ({check.latency_ms:.0f}ms)" if check.latency_ms > 0 else ""
+        click.echo(f"  [{status}] {name}: {check.detail}{latency}")
+
+    click.echo(f"\n{result.summary}")
+    if not result.healthy:
+        ctx.exit(1)
+
+
+# -- neurologist-challenge ---------------------------------------------------
+
+
+@cli.command("neurologist-challenge")
+@click.argument("topic")
+@click.pass_context
+def neurologist_challenge_cmd(ctx: click.Context, topic: str) -> None:
+    """Corrigibility skeptic challenge on a topic."""
+    from three_surgeons.core.neurologist import neurologist_challenge
+
+    config: Config = ctx.obj["config"]
+    neuro = LLMProvider(config.neurologist)
+    evidence = EvidenceStore(str(config.evidence.resolved_path))
+
+    click.echo(f"Challenging: {topic}\n")
+    result = neurologist_challenge(topic, neuro, evidence_store=evidence)
+
+    if result.challenges:
+        for c in result.challenges:
+            icon = {"critical": "!!", "worth_testing": "?", "informational": "i"}.get(c.severity, "?")
+            click.echo(f"  [{icon}] {c.claim}")
+            click.echo(f"      Challenge: {c.challenge}")
+            if c.suggested_test:
+                click.echo(f"      Test: {c.suggested_test}")
+            click.echo()
+    else:
+        click.echo("  No challenges found.")
+
+
+# -- introspect --------------------------------------------------------------
+
+
+@cli.command("introspect")
+@click.pass_context
+def introspect_cmd(ctx: click.Context) -> None:
+    """Ask each surgeon to self-report capabilities."""
+    from three_surgeons.core.neurologist import introspect
+
+    config: Config = ctx.obj["config"]
+    providers = {}
+    for name, cfg in [("cardiologist", config.cardiologist), ("neurologist", config.neurologist)]:
+        try:
+            providers[name] = LLMProvider(cfg)
+        except Exception:
+            pass
+
+    click.echo("Introspecting surgeons...\n")
+    results = introspect(providers)
+
+    for name, result in results.items():
+        status = "OK" if result.ok else "FAIL"
+        click.echo(f"  {name} ({result.model}): [{status}]")
+        if result.capabilities:
+            click.echo(f"    {result.capabilities[:200]}")
+        click.echo()
+
+
+# -- ask-local ---------------------------------------------------------------
+
+
+@cli.command("ask-local")
+@click.argument("prompt")
+@click.pass_context
+def ask_local_cmd(ctx: click.Context, prompt: str) -> None:
+    """Direct query to the neurologist (local model)."""
+    from three_surgeons.core.direct import ask_local
+
+    config: Config = ctx.obj["config"]
+    neuro = LLMProvider(config.neurologist)
+    resp = ask_local(prompt, neuro)
+
+    if resp.ok:
+        click.echo(resp.content)
+    else:
+        click.echo(f"Error: {resp.content}", err=True)
+        ctx.exit(1)
+
+
+# -- ask-remote --------------------------------------------------------------
+
+
+@cli.command("ask-remote")
+@click.argument("prompt")
+@click.pass_context
+def ask_remote_cmd(ctx: click.Context, prompt: str) -> None:
+    """Direct query to the cardiologist (remote model)."""
+    from three_surgeons.core.direct import ask_remote
+
+    config: Config = ctx.obj["config"]
+    cardio = LLMProvider(config.cardiologist)
+    resp = ask_remote(prompt, cardio)
+
+    if resp.ok:
+        click.echo(resp.content)
+        click.echo(f"\nCost: ${resp.cost_usd:.4f}")
+    else:
+        click.echo(f"Error: {resp.content}", err=True)
+        ctx.exit(1)
+
+
+# -- cardio-review -----------------------------------------------------------
+
+
+@cli.command("cardio-review")
+@click.argument("topic")
+@click.option("--git-context", default=None, help="Recent git changes context")
+@click.pass_context
+def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str) -> None:
+    """Cardiologist cross-examination review."""
+    from three_surgeons.core.cardio import cardio_review
+    from three_surgeons.core.cross_exam import SurgeryTeam
+
+    config: Config = ctx.obj["config"]
+    state = MemoryBackend()
+    evidence = EvidenceStore(str(config.evidence.resolved_path))
+    cardio = LLMProvider(config.cardiologist)
+    neuro = LLMProvider(config.neurologist)
+    team = SurgeryTeam(cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state)
+
+    click.echo(f"Cardio review: {topic}\n")
+    result = cardio_review(topic, team, evidence_store=evidence, git_context=git_context)
+
+    click.echo("--- Cardiologist ---")
+    click.echo(result.cardiologist_findings)
+    click.echo("\n--- Neurologist ---")
+    click.echo(result.neurologist_blind_spots)
+    click.echo("\n--- Synthesis ---")
+    click.echo(result.synthesis)
+
+    if result.dissent:
+        click.echo(f"\nDissent: {result.dissent}")
+    if result.recommendations:
+        click.echo("\nRecommendations:")
+        for r in result.recommendations:
+            click.echo(f"  - {r}")
+
+
+# -- ab-validate -------------------------------------------------------------
+
+
+@cli.command("ab-validate")
+@click.argument("description")
+@click.pass_context
+def ab_validate_cmd(ctx: click.Context, description: str) -> None:
+    """Quick 3-surgeon fix validation."""
+    from three_surgeons.core.cardio import ab_validate
+    from three_surgeons.core.cross_exam import SurgeryTeam
+
+    config: Config = ctx.obj["config"]
+    state = MemoryBackend()
+    evidence = EvidenceStore(str(config.evidence.resolved_path))
+    cardio = LLMProvider(config.cardiologist)
+    neuro = LLMProvider(config.neurologist)
+    team = SurgeryTeam(cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state)
+
+    click.echo(f"Validating: {description}\n")
+    result = ab_validate(description, team)
+
+    click.echo(f"  Verdict: {result.verdict}")
+    click.echo(f"  Reasoning: {result.reasoning}")
+    if result.surgeon_votes:
+        click.echo("  Votes:")
+        for name, vote in result.surgeon_votes.items():
+            click.echo(f"    {name}: {vote}")
+
+
+# -- research ----------------------------------------------------------------
+
+
+@cli.command("research")
+@click.argument("topic")
+@click.pass_context
+def research_cmd(ctx: click.Context, topic: str) -> None:
+    """Self-directed research on a topic."""
+    from three_surgeons.core.research import research
+
+    config: Config = ctx.obj["config"]
+    cardio = LLMProvider(config.cardiologist)
+
+    click.echo(f"Researching: {topic}\n")
+    result = research(topic, cardio)
+
+    if result.findings:
+        click.echo("Findings:")
+        for f in result.findings:
+            click.echo(f"  - {f}")
+    if result.sources:
+        click.echo(f"\nSources: {', '.join(result.sources)}")
+    click.echo(f"\nCost: ${result.cost_usd:.4f}")
+
+
 # -- ab-propose -------------------------------------------------------------
 
 

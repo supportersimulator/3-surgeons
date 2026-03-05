@@ -43,6 +43,17 @@ class TestComplexityVector:
         )
         assert cv.noise_threshold == 10
 
+    def test_default_category(self):
+        cv = ComplexityVector(id="X", name="X", keywords=["x"], risk_score=0.5)
+        assert cv.category == "operational"
+
+    def test_custom_category(self):
+        cv = ComplexityVector(
+            id="X", name="X", keywords=["x"],
+            category="structural", risk_score=0.5,
+        )
+        assert cv.category == "structural"
+
 
 # ── SentinelResult dataclass ─────────────────────────────────────────
 
@@ -145,7 +156,29 @@ class TestSentinel:
 
     def test_default_vectors_loaded(self):
         sentinel = Sentinel()
-        assert len(sentinel._vectors) >= 5  # At least 5 defaults
+        assert len(sentinel._vectors) >= 20  # 20 default vectors
+
+    def test_default_vectors_have_categories(self):
+        from three_surgeons.core.sentinel import DEFAULT_VECTORS
+        categories = {v.category for v in DEFAULT_VECTORS}
+        assert "structural" in categories
+        assert "operational" in categories
+        assert "resource" in categories
+        assert "identity" in categories
+
+    def test_error_swallowing_vector(self):
+        """CV-ES: Error swallowing should trigger on except/pass patterns."""
+        sentinel = Sentinel()
+        result = sentinel.run_cycle("except RuntimeError: pass  # silent ignore swallow")
+        triggered_ids = [t["id"] for t in result.triggered_vectors]
+        assert "CV-ES" in triggered_ids
+
+    def test_feedback_loop_vector(self):
+        """CV-FLC: Feedback loop contamination detection."""
+        sentinel = Sentinel()
+        result = sentinel.run_cycle("circular feedback loop with recursive self-reference")
+        triggered_ids = [t["id"] for t in result.triggered_vectors]
+        assert "CV-FLC" in triggered_ids
 
     def test_overall_score_bounded_zero_to_one(self):
         sentinel = Sentinel()

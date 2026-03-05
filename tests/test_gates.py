@@ -285,3 +285,148 @@ class TestCorrigibilityGate:
         ]:
             result = gate.run(action)
             assert result.passed is True, f"Expected pass for: {action}"
+
+
+# ── CorrigibilityGate integrity checks ───────────────────────────────
+
+
+class TestCorrigibilityGateIntegrity:
+    def test_integrity_passes_with_no_data(self, tmp_path):
+        """Integrity check passes when no counters exist yet."""
+        config = Config()
+        state = MemoryBackend()
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=config, state=state, evidence=evidence)
+        result = gate.check_integrity()
+        assert result.passed is True
+
+    def test_integrity_passes_monotonic(self, tmp_path):
+        """Counters that increase pass monotonic checks."""
+        config = Config()
+        state = MemoryBackend()
+        state.set("integrity:events_count", "10")
+        state.set("integrity:events_count:prev", "5")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=config, state=state, evidence=evidence)
+        result = gate.check_integrity()
+        assert result.passed is True
+
+    def test_integrity_fails_on_decrease(self, tmp_path):
+        """Counter decrease fails the monotonic check."""
+        config = Config()
+        state = MemoryBackend()
+        state.set("integrity:events_count", "3")
+        state.set("integrity:events_count:prev", "10")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=config, state=state, evidence=evidence)
+        result = gate.check_integrity()
+        assert result.passed is False
+        assert any("decreased" in c.message for c in result.checks if not c.passed)
+
+    def test_integrity_no_state_skips(self):
+        """Without state backend, integrity checks are skipped."""
+        config = Config()
+        gate = CorrigibilityGate(config=config)
+        result = gate.check_integrity()
+        assert result.passed is True
+        assert any("skipped" in c.message.lower() for c in result.checks)
+
+    def test_integrity_service_health(self, tmp_path):
+        """Service health check passes with operational state backend."""
+        config = Config()
+        state = MemoryBackend()
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=config, state=state, evidence=evidence)
+        result = gate.check_integrity()
+        health_check = next((c for c in result.checks if c.name == "service_health"), None)
+        assert health_check is not None
+        assert health_check.passed is True
+
+    def test_integrity_evidence_operational(self, tmp_path):
+        """Evidence operational check passes with accessible store."""
+        config = Config()
+        state = MemoryBackend()
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=config, state=state, evidence=evidence)
+        result = gate.check_integrity()
+        ev_check = next((c for c in result.checks if c.name == "evidence_operational"), None)
+        assert ev_check is not None
+        assert ev_check.passed is True
+
+    def test_integrity_has_duration(self, tmp_path):
+        config = Config()
+        state = MemoryBackend()
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=config, state=state, evidence=evidence)
+        result = gate.check_integrity()
+        assert result.duration_ms >= 0
+
+
+# ── GainsGate expanded checks ────────────────────────────────────────
+
+
+class TestGainsGateExpanded:
+    def test_gpu_lock_stale_check_no_config(self, tmp_path):
+        """GPU lock check skips when path not configured."""
+        state = MemoryBackend()
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        config = Config()
+        config.gates.gains_gate_checks = ["gpu_lock_stale"]
+        gate = GainsGate(state=state, evidence=evidence, config=config)
+        result = gate.run()
+        gpu_check = next((c for c in result.checks if c.name == "gpu_lock_stale"), None)
+        assert gpu_check is not None
+        assert gpu_check.passed is True
+
+    def test_gpu_lock_stale_check_free(self, tmp_path):
+        """GPU lock check passes when lock file doesn't exist."""
+        state = MemoryBackend()
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        config = Config()
+        config.gpu_lock_path = str(tmp_path / "gpu.lock")
+        config.gates.gains_gate_checks = ["gpu_lock_stale"]
+        gate = GainsGate(state=state, evidence=evidence, config=config)
+        result = gate.run()
+        gpu_check = next((c for c in result.checks if c.name == "gpu_lock_stale"), None)
+        assert gpu_check is not None
+        assert gpu_check.passed is True
+
+    def test_gpu_lock_stale_check_dead_pid(self, tmp_path):
+        """GPU lock check fails when PID is dead."""
+        lock_file = tmp_path / "gpu.lock"
+        lock_file.write_text("999999")
+        state = MemoryBackend()
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        config = Config()
+        config.gpu_lock_path = str(lock_file)
+        config.gates.gains_gate_checks = ["gpu_lock_stale"]
+        gate = GainsGate(state=state, evidence=evidence, config=config)
+        result = gate.run()
+        gpu_check = next((c for c in result.checks if c.name == "gpu_lock_stale"), None)
+        assert gpu_check is not None
+        assert gpu_check.passed is False
+
+    def test_critical_findings_check_zero(self, tmp_path):
+        """Critical findings check passes when count is 0."""
+        state = MemoryBackend()
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        config = Config()
+        config.gates.gains_gate_checks = ["critical_findings"]
+        gate = GainsGate(state=state, evidence=evidence, config=config)
+        result = gate.run()
+        cf_check = next((c for c in result.checks if c.name == "critical_findings"), None)
+        assert cf_check is not None
+        assert cf_check.passed is True
+
+    def test_critical_findings_check_nonzero(self, tmp_path):
+        """Critical findings check fails when count > 0."""
+        state = MemoryBackend()
+        state.set("critical_findings:count", "3")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        config = Config()
+        config.gates.gains_gate_checks = ["critical_findings"]
+        gate = GainsGate(state=state, evidence=evidence, config=config)
+        result = gate.run()
+        cf_check = next((c for c in result.checks if c.name == "critical_findings"), None)
+        assert cf_check is not None
+        assert cf_check.passed is False

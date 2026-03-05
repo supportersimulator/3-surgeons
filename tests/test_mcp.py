@@ -40,6 +40,14 @@ class TestMCPServerImport:
             "ab_start",
             "ab_measure",
             "ab_conclude",
+            "neurologist_pulse_tool",
+            "neurologist_challenge_tool",
+            "introspect_tool",
+            "ask_local_tool",
+            "ask_remote_tool",
+            "cardio_review_tool",
+            "ab_validate_tool",
+            "research_tool",
         }
         assert expected.issubset(set(TOOL_NAMES))
 
@@ -64,6 +72,14 @@ class TestMCPServerImport:
             "ab_start",
             "ab_measure",
             "ab_conclude",
+            "neurologist_pulse_tool",
+            "neurologist_challenge_tool",
+            "introspect_tool",
+            "ask_local_tool",
+            "ask_remote_tool",
+            "cardio_review_tool",
+            "ab_validate_tool",
+            "research_tool",
         }
         for name in TOOL_NAMES:
             assert name in known, f"Unexpected tool: {name}"
@@ -151,6 +167,38 @@ class TestToolFunctions:
         from three_surgeons.mcp.server import _ab_conclude
 
         assert callable(_ab_conclude)
+
+    def test_neurologist_pulse_function_exists(self):
+        from three_surgeons.mcp.server import _neurologist_pulse_impl
+        assert callable(_neurologist_pulse_impl)
+
+    def test_neurologist_challenge_function_exists(self):
+        from three_surgeons.mcp.server import _neurologist_challenge_impl
+        assert callable(_neurologist_challenge_impl)
+
+    def test_introspect_function_exists(self):
+        from three_surgeons.mcp.server import _introspect_impl
+        assert callable(_introspect_impl)
+
+    def test_ask_local_function_exists(self):
+        from three_surgeons.mcp.server import _ask_local_impl
+        assert callable(_ask_local_impl)
+
+    def test_ask_remote_function_exists(self):
+        from three_surgeons.mcp.server import _ask_remote_impl
+        assert callable(_ask_remote_impl)
+
+    def test_cardio_review_function_exists(self):
+        from three_surgeons.mcp.server import _cardio_review_impl
+        assert callable(_cardio_review_impl)
+
+    def test_ab_validate_function_exists(self):
+        from three_surgeons.mcp.server import _ab_validate_impl
+        assert callable(_ab_validate_impl)
+
+    def test_research_function_exists(self):
+        from three_surgeons.mcp.server import _research_impl
+        assert callable(_research_impl)
 
 
 class TestToolDelegation:

@@ -92,6 +92,7 @@ class Config:
     budgets: BudgetConfig = field(default_factory=BudgetConfig)
     evidence: EvidenceConfig = field(default_factory=EvidenceConfig)
     gates: GatesConfig = field(default_factory=GatesConfig)
+    gpu_lock_path: Optional[str] = None
 
     @classmethod
     def from_yaml(cls, path: Path) -> Config:
