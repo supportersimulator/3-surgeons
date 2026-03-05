@@ -8,5 +8,12 @@
   },
   "repository": "https://github.com/supportersimulator/3-surgeons",
   "license": "MIT",
-  "keywords": ["multi-model", "consensus", "cross-examination", "quality-gates", "a-b-testing"]
+  "keywords": ["multi-model", "consensus", "cross-examination", "quality-gates", "a-b-testing"],
+  "mcpServers": {
+    "3-surgeons": {
+      "command": "python",
+      "args": ["-m", "three_surgeons.mcp.server"],
+      "env": {}
+    }
+  }
 }
