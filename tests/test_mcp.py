@@ -96,13 +96,26 @@ class TestPluginJSON:
         assert "3-surgeons" in data["mcpServers"]
 
     def test_plugin_json_mcp_server_command(self):
-        """MCP server should use python -m invocation."""
+        """MCP server should use the bin/3surgeons-mcp launcher."""
         plugin_json = Path(__file__).parent.parent / ".claude-plugin" / "plugin.json"
         data = json.loads(plugin_json.read_text())
         server_cfg = data["mcpServers"]["3-surgeons"]
-        assert server_cfg["command"] == "python"
-        assert "-m" in server_cfg["args"]
-        assert "three_surgeons.mcp.server" in server_cfg["args"]
+        assert "3surgeons-mcp" in server_cfg["command"]
+
+    def test_plugin_json_has_homepage(self):
+        """plugin.json should declare a homepage."""
+        plugin_json = Path(__file__).parent.parent / ".claude-plugin" / "plugin.json"
+        data = json.loads(plugin_json.read_text())
+        assert "homepage" in data
+        assert len(data["homepage"]) > 0
+
+    def test_marketplace_json_exists(self):
+        """marketplace.json should exist for plugin install support."""
+        marketplace_json = Path(__file__).parent.parent / ".claude-plugin" / "marketplace.json"
+        assert marketplace_json.is_file()
+        data = json.loads(marketplace_json.read_text())
+        assert "plugins" in data
+        assert len(data["plugins"]) >= 1
 
 
 class TestToolFunctions:
@@ -465,3 +478,66 @@ class TestErrorHandling:
 
             assert isinstance(result, dict)
             assert "error" in result
+
+
+class TestPluginStructure:
+    """Verify complete plugin structure matches Claude Code conventions."""
+
+    def test_hooks_json_exists(self):
+        hooks_json = Path(__file__).parent.parent / "hooks" / "hooks.json"
+        assert hooks_json.is_file()
+        data = json.loads(hooks_json.read_text())
+        assert "hooks" in data
+        assert "SessionStart" in data["hooks"]
+
+    def test_hooks_json_uses_polyglot_wrapper(self):
+        hooks_json = Path(__file__).parent.parent / "hooks" / "hooks.json"
+        data = json.loads(hooks_json.read_text())
+        cmd = data["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        assert "run-hook.cmd" in cmd
+
+    def test_session_start_script_exists(self):
+        script = Path(__file__).parent.parent / "hooks" / "session-start"
+        assert script.is_file()
+
+    def test_polyglot_wrapper_exists(self):
+        wrapper = Path(__file__).parent.parent / "hooks" / "run-hook.cmd"
+        assert wrapper.is_file()
+
+    def test_mcp_launcher_exists(self):
+        launcher = Path(__file__).parent.parent / "bin" / "3surgeons-mcp"
+        assert launcher.is_file()
+
+    def test_all_skills_have_frontmatter(self):
+        """Every SKILL.md must have YAML frontmatter with name and description."""
+        skills_dir = Path(__file__).parent.parent / "skills"
+        skill_files = list(skills_dir.glob("*/SKILL.md"))
+        assert len(skill_files) >= 13, f"Expected >= 13 skills, found {len(skill_files)}"
+        for sf in skill_files:
+            content = sf.read_text()
+            assert content.startswith("---"), f"{sf} missing YAML frontmatter"
+            # Check frontmatter has name and description
+            frontmatter_end = content.index("---", 3)
+            frontmatter = content[3:frontmatter_end]
+            assert "name:" in frontmatter, f"{sf} missing name in frontmatter"
+            assert "description:" in frontmatter, f"{sf} missing description in frontmatter"
+
+    def test_commands_have_frontmatter(self):
+        """Every command .md must have YAML frontmatter with description."""
+        commands_dir = Path(__file__).parent.parent / "commands"
+        cmd_files = list(commands_dir.glob("*.md"))
+        assert len(cmd_files) >= 6, f"Expected >= 6 commands, found {len(cmd_files)}"
+        for cf in cmd_files:
+            content = cf.read_text()
+            assert content.startswith("---"), f"{cf} missing YAML frontmatter"
+            frontmatter_end = content.index("---", 3)
+            frontmatter = content[3:frontmatter_end]
+            assert "description:" in frontmatter, f"{cf} missing description"
+
+    def test_session_start_has_json_escape(self):
+        """Session start hook must properly escape JSON."""
+        script = Path(__file__).parent.parent / "hooks" / "session-start"
+        content = script.read_text()
+        assert "escape_for_json" in content, "Missing JSON escape function"
+        assert "hookSpecificOutput" in content, "Missing hookSpecificOutput format"
+        assert "additional_context" in content, "Missing additional_context format"
