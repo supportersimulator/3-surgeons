@@ -1,0 +1,439 @@
+"""Cross-examination engine for multi-model consensus evaluation.
+
+Orchestrates the Cardiologist (GPT-4.1) and Neurologist (Qwen3-4B) through
+three operations: consult, cross_examine, and consensus.
+
+Philosophy: "The value is in the disagreements, not the agreements."
+"""
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass, field
+from typing import Optional, Protocol
+
+from three_surgeons.core.evidence import EvidenceStore
+from three_surgeons.core.state import StateBackend
+
+logger = logging.getLogger(__name__)
+
+
+class LLMProviderLike(Protocol):
+    """Protocol for anything that can answer LLM queries (real or mock)."""
+
+    def query(
+        self,
+        system: str,
+        prompt: str,
+        max_tokens: int = ...,
+        temperature: float = ...,
+        timeout_s: float = ...,
+    ) -> "LLMResponseLike": ...
+
+
+class LLMResponseLike(Protocol):
+    """Minimal response shape we depend on."""
+
+    ok: bool
+    content: str
+    latency_ms: int
+    model: str
+    cost_usd: float
+
+
+# ── Result Dataclasses ───────────────────────────────────────────────
+
+
+@dataclass
+class CrossExamResult:
+    """Result from a consult or cross_examine operation."""
+
+    topic: str
+    neurologist_report: Optional[str] = None
+    cardiologist_report: Optional[str] = None
+    synthesis: Optional[str] = None
+    total_cost: float = 0.0
+    total_latency_ms: float = 0.0
+
+
+@dataclass
+class ConsensusResult:
+    """Result from a consensus (confidence-weighted vote) operation."""
+
+    claim: str
+    neurologist_confidence: float = 0.0
+    neurologist_assessment: str = "unavailable"
+    cardiologist_confidence: float = 0.0
+    cardiologist_assessment: str = "unavailable"
+    weighted_score: float = 0.0
+    total_cost: float = 0.0
+
+
+# ── Prompt Templates ─────────────────────────────────────────────────
+
+_CONSULT_SYSTEM = (
+    "You are a {role} surgeon in a multi-model evaluation team. "
+    "Analyze the topic independently. Be concise and evidence-based."
+)
+
+_CROSS_EXAM_REVIEW_SYSTEM = (
+    "You are a {role} surgeon reviewing another surgeon's analysis. "
+    "Identify strengths, weaknesses, blind spots, and disagreements. "
+    "Be specific and evidence-based. Highlight what the other surgeon "
+    "missed or got wrong."
+)
+
+_CROSS_EXAM_REVIEW_PROMPT = (
+    "Original topic: {topic}\n\n"
+    "The other surgeon's analysis:\n{other_analysis}\n\n"
+    "Provide your cross-examination review. Focus on disagreements and "
+    "what was missed."
+)
+
+_SYNTHESIS_SYSTEM = (
+    "You are synthesizing two independent surgical analyses. "
+    "Focus on DISAGREEMENTS -- where the surgeons diverge is the most "
+    "valuable signal. Also note agreements for completeness."
+)
+
+_SYNTHESIS_PROMPT = (
+    "Topic: {topic}\n\n"
+    "--- Cardiologist (GPT-4.1) ---\n{cardio_report}\n\n"
+    "--- Neurologist (Qwen3-4B) ---\n{neuro_report}\n\n"
+    "Synthesize. Emphasize disagreements."
+)
+
+_CONSENSUS_SYSTEM = (
+    "You are evaluating a claim as part of a multi-model consensus. "
+    'Respond with ONLY valid JSON: {{"confidence": 0.0-1.0, '
+    '"assessment": "agree"|"disagree"|"uncertain", '
+    '"reasoning": "brief explanation"}}'
+)
+
+_CONSENSUS_PROMPT = 'Evaluate this claim: "{claim}"'
+
+
+# ── SurgeryTeam ──────────────────────────────────────────────────────
+
+
+class SurgeryTeam:
+    """Orchestrates multi-model evaluation across Cardiologist and Neurologist.
+
+    Three operations:
+    - consult: quick parallel query, raw analyses
+    - cross_examine: deep evaluation with cross-review and synthesis
+    - consensus: confidence-weighted vote on a specific claim
+    """
+
+    def __init__(
+        self,
+        cardiologist: LLMProviderLike,
+        neurologist: LLMProviderLike,
+        evidence: EvidenceStore,
+        state: StateBackend,
+    ) -> None:
+        self._cardiologist = cardiologist
+        self._neurologist = neurologist
+        self._evidence = evidence
+        self._state = state
+
+    # ── consult ──────────────────────────────────────────────────────
+
+    def consult(self, topic: str) -> CrossExamResult:
+        """Quick parallel query to both surgeons. Returns raw analyses.
+
+        No cross-examination or synthesis -- just independent opinions.
+        Logs result in evidence store.
+        """
+        result = CrossExamResult(topic=topic)
+
+        # Query cardiologist
+        cardio_resp = self._safe_query(
+            self._cardiologist,
+            system=_CONSULT_SYSTEM.format(role="cardiologist"),
+            prompt=topic,
+        )
+        if cardio_resp is not None:
+            result.cardiologist_report = cardio_resp.content
+            result.total_cost += cardio_resp.cost_usd
+            result.total_latency_ms += cardio_resp.latency_ms
+            self._track_cost("cardiologist", cardio_resp.cost_usd, "consult")
+
+        # Query neurologist
+        neuro_resp = self._safe_query(
+            self._neurologist,
+            system=_CONSULT_SYSTEM.format(role="neurologist"),
+            prompt=topic,
+        )
+        if neuro_resp is not None:
+            result.neurologist_report = neuro_resp.content
+            result.total_cost += neuro_resp.cost_usd
+            result.total_latency_ms += neuro_resp.latency_ms
+            self._track_cost("neurologist", neuro_resp.cost_usd, "consult")
+
+        # Log to evidence store
+        self._log_cross_exam(result)
+
+        return result
+
+    # ── cross_examine ────────────────────────────────────────────────
+
+    def cross_examine(
+        self, topic: str, depth: str = "full"
+    ) -> CrossExamResult:
+        """Deep multi-phase evaluation.
+
+        Phase 1: Both surgeons analyze independently.
+        Phase 2: Each surgeon reviews the other's analysis.
+        Phase 3: Synthesize findings, highlight disagreements.
+
+        Handles model failures gracefully -- one surgeon failing does not
+        crash the entire operation.
+        """
+        result = CrossExamResult(topic=topic)
+
+        # ── Phase 1: Independent analysis ────────────────────────────
+        cardio_initial = self._safe_query(
+            self._cardiologist,
+            system=_CONSULT_SYSTEM.format(role="cardiologist"),
+            prompt=topic,
+        )
+        neuro_initial = self._safe_query(
+            self._neurologist,
+            system=_CONSULT_SYSTEM.format(role="neurologist"),
+            prompt=topic,
+        )
+
+        cardio_text = cardio_initial.content if cardio_initial else None
+        neuro_text = neuro_initial.content if neuro_initial else None
+
+        # Accumulate cost/latency from phase 1
+        if cardio_initial:
+            result.total_cost += cardio_initial.cost_usd
+            result.total_latency_ms += cardio_initial.latency_ms
+            self._track_cost("cardiologist", cardio_initial.cost_usd, "cross_examine_p1")
+        if neuro_initial:
+            result.total_cost += neuro_initial.cost_usd
+            result.total_latency_ms += neuro_initial.latency_ms
+            self._track_cost("neurologist", neuro_initial.cost_usd, "cross_examine_p1")
+
+        # ── Phase 2: Cross-review ────────────────────────────────────
+        # Each surgeon reviews the other's analysis
+        cardio_review = None
+        neuro_review = None
+
+        if neuro_text:
+            # Cardiologist reviews neurologist's analysis
+            cardio_review = self._safe_query(
+                self._cardiologist,
+                system=_CROSS_EXAM_REVIEW_SYSTEM.format(role="cardiologist"),
+                prompt=_CROSS_EXAM_REVIEW_PROMPT.format(
+                    topic=topic, other_analysis=neuro_text
+                ),
+            )
+            if cardio_review:
+                result.total_cost += cardio_review.cost_usd
+                result.total_latency_ms += cardio_review.latency_ms
+                self._track_cost(
+                    "cardiologist", cardio_review.cost_usd, "cross_examine_p2"
+                )
+
+        if cardio_text:
+            # Neurologist reviews cardiologist's analysis
+            neuro_review = self._safe_query(
+                self._neurologist,
+                system=_CROSS_EXAM_REVIEW_SYSTEM.format(role="neurologist"),
+                prompt=_CROSS_EXAM_REVIEW_PROMPT.format(
+                    topic=topic, other_analysis=cardio_text
+                ),
+            )
+            if neuro_review:
+                result.total_cost += neuro_review.cost_usd
+                result.total_latency_ms += neuro_review.latency_ms
+                self._track_cost(
+                    "neurologist", neuro_review.cost_usd, "cross_examine_p2"
+                )
+
+        # Build final reports: initial analysis + cross-review
+        result.cardiologist_report = self._build_report(
+            cardio_text, cardio_review
+        )
+        result.neurologist_report = self._build_report(
+            neuro_text, neuro_review
+        )
+
+        # ── Phase 3: Synthesis ───────────────────────────────────────
+        # Use cardiologist for synthesis (external model, broader perspective)
+        if result.cardiologist_report and result.neurologist_report:
+            synth_resp = self._safe_query(
+                self._cardiologist,
+                system=_SYNTHESIS_SYSTEM,
+                prompt=_SYNTHESIS_PROMPT.format(
+                    topic=topic,
+                    cardio_report=result.cardiologist_report,
+                    neuro_report=result.neurologist_report,
+                ),
+            )
+            if synth_resp:
+                result.synthesis = synth_resp.content
+                result.total_cost += synth_resp.cost_usd
+                result.total_latency_ms += synth_resp.latency_ms
+                self._track_cost(
+                    "cardiologist", synth_resp.cost_usd, "cross_examine_synth"
+                )
+
+        # Log to evidence store
+        self._log_cross_exam(result)
+
+        return result
+
+    # ── consensus ────────────────────────────────────────────────────
+
+    def consensus(self, claim: str) -> ConsensusResult:
+        """Confidence-weighted vote on a specific claim.
+
+        Asks each surgeon to rate confidence (0-1) and assessment
+        (agree/disagree/uncertain). Calculates weighted consensus score.
+
+        Handles JSON parsing failures gracefully -- a surgeon that returns
+        non-JSON gets default confidence 0.0 and assessment "unavailable".
+        """
+        result = ConsensusResult(claim=claim)
+
+        # Query cardiologist
+        cardio_resp = self._safe_query(
+            self._cardiologist,
+            system=_CONSENSUS_SYSTEM,
+            prompt=_CONSENSUS_PROMPT.format(claim=claim),
+            max_tokens=256,
+            temperature=0.2,
+        )
+        if cardio_resp:
+            result.total_cost += cardio_resp.cost_usd
+            self._track_cost("cardiologist", cardio_resp.cost_usd, "consensus")
+            parsed = self._parse_consensus_json(cardio_resp.content)
+            result.cardiologist_confidence = parsed["confidence"]
+            result.cardiologist_assessment = parsed["assessment"]
+
+        # Query neurologist
+        neuro_resp = self._safe_query(
+            self._neurologist,
+            system=_CONSENSUS_SYSTEM,
+            prompt=_CONSENSUS_PROMPT.format(claim=claim),
+            max_tokens=256,
+            temperature=0.2,
+        )
+        if neuro_resp:
+            result.total_cost += neuro_resp.cost_usd
+            self._track_cost("neurologist", neuro_resp.cost_usd, "consensus")
+            parsed = self._parse_consensus_json(neuro_resp.content)
+            result.neurologist_confidence = parsed["confidence"]
+            result.neurologist_assessment = parsed["assessment"]
+
+        # Calculate weighted consensus score
+        result.weighted_score = self._calculate_weighted_score(result)
+
+        return result
+
+    # ── Private helpers ──────────────────────────────────────────────
+
+    def _safe_query(
+        self,
+        provider: LLMProviderLike,
+        system: str,
+        prompt: str,
+        max_tokens: int = 2048,
+        temperature: float = 0.7,
+    ) -> Optional[LLMResponseLike]:
+        """Query a provider, returning None on failure instead of crashing."""
+        try:
+            resp = provider.query(
+                system=system,
+                prompt=prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            if not resp.ok:
+                logger.warning(
+                    "LLM query failed (model=%s): %s", resp.model, resp.content
+                )
+                return None
+            return resp
+        except Exception as exc:
+            logger.error("Unexpected error querying LLM: %s", exc)
+            return None
+
+    @staticmethod
+    def _build_report(
+        initial: Optional[str],
+        review: Optional[LLMResponseLike],
+    ) -> Optional[str]:
+        """Combine initial analysis with cross-review into a single report."""
+        if initial is None:
+            return None
+
+        parts = [initial]
+        if review is not None:
+            parts.append(f"\n\n--- Cross-Review ---\n{review.content}")
+        return "".join(parts)
+
+    @staticmethod
+    def _parse_consensus_json(content: str) -> dict:
+        """Parse a surgeon's consensus JSON response.
+
+        Returns defaults on failure: confidence=0.0, assessment="unavailable".
+        """
+        try:
+            data = json.loads(content)
+            return {
+                "confidence": float(data.get("confidence", 0.0)),
+                "assessment": str(data.get("assessment", "unavailable")),
+            }
+        except (json.JSONDecodeError, TypeError, ValueError):
+            logger.warning("Failed to parse consensus JSON: %s", content[:100])
+            return {"confidence": 0.0, "assessment": "unavailable"}
+
+    @staticmethod
+    def _calculate_weighted_score(result: ConsensusResult) -> float:
+        """Calculate a weighted consensus score from both surgeons' votes.
+
+        Maps assessments to numeric values:
+          agree=+1, uncertain=0, disagree=-1
+        Then weights by confidence:
+          score = sum(confidence_i * assessment_i) / sum(confidence_i)
+
+        Returns 0.0 if total confidence is 0 (both unavailable).
+        """
+        assessment_map = {"agree": 1.0, "uncertain": 0.0, "disagree": -1.0}
+
+        cardio_val = assessment_map.get(result.cardiologist_assessment, 0.0)
+        neuro_val = assessment_map.get(result.neurologist_assessment, 0.0)
+
+        total_confidence = (
+            result.cardiologist_confidence + result.neurologist_confidence
+        )
+        if total_confidence == 0:
+            return 0.0
+
+        weighted = (
+            result.cardiologist_confidence * cardio_val
+            + result.neurologist_confidence * neuro_val
+        ) / total_confidence
+
+        return weighted
+
+    def _track_cost(
+        self, surgeon: str, cost_usd: float, operation: str
+    ) -> None:
+        """Track cost in the evidence store. Skip zero-cost (local models)."""
+        if cost_usd > 0:
+            self._evidence.track_cost(surgeon, cost_usd, operation)
+
+    def _log_cross_exam(self, result: CrossExamResult) -> None:
+        """Log a cross-exam result to the evidence store."""
+        self._evidence.record_cross_exam(
+            topic=result.topic,
+            neurologist_report=result.neurologist_report or "(unavailable)",
+            cardiologist_report=result.cardiologist_report or "(unavailable)",
+            consensus_score=0.0,  # No consensus score for consult/cross_examine
+        )
