@@ -1,0 +1,230 @@
+"""Tests for the 3-Surgeons configuration system."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+import yaml
+
+from three_surgeons.core.config import Config, SurgeonConfig
+
+
+class TestLoadFromYaml:
+    """Test loading configuration from a YAML file."""
+
+    def test_load_from_yaml(self, tmp_path: Path) -> None:
+        """Write a config YAML to tmp_path, load it, verify surgeon fields."""
+        config_data = {
+            "surgeons": {
+                "cardiologist": {
+                    "provider": "openai",
+                    "endpoint": "https://api.openai.com/v1",
+                    "model": "gpt-4.1-mini",
+                    "api_key_env": "OPENAI_API_KEY",
+                    "role": "External perspective",
+                },
+                "neurologist": {
+                    "provider": "ollama",
+                    "endpoint": "http://localhost:11434/v1",
+                    "model": "qwen3:4b",
+                    "role": "Local intelligence",
+                },
+            },
+            "budgets": {
+                "daily_external_usd": 10.0,
+                "autonomous_ab_usd": 3.0,
+            },
+            "evidence": {
+                "db_path": "~/.3surgeons/evidence.db",
+            },
+        }
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml.dump(config_data))
+
+        cfg = Config.from_yaml(yaml_path)
+
+        assert cfg.cardiologist.provider == "openai"
+        assert cfg.cardiologist.endpoint == "https://api.openai.com/v1"
+        assert cfg.cardiologist.model == "gpt-4.1-mini"
+        assert cfg.cardiologist.api_key_env == "OPENAI_API_KEY"
+        assert cfg.cardiologist.role == "External perspective"
+
+        assert cfg.neurologist.provider == "ollama"
+        assert cfg.neurologist.endpoint == "http://localhost:11434/v1"
+        assert cfg.neurologist.model == "qwen3:4b"
+        assert cfg.neurologist.role == "Local intelligence"
+
+        assert cfg.budgets.daily_external_usd == 10.0
+        assert cfg.budgets.autonomous_ab_usd == 3.0
+
+
+class TestLoadDefaults:
+    """Test default configuration when no file exists."""
+
+    def test_load_default_when_no_file(self, tmp_path: Path) -> None:
+        """Load from nonexistent path, verify defaults are returned."""
+        nonexistent = tmp_path / "does_not_exist.yaml"
+        cfg = Config.from_yaml(nonexistent)
+
+        # Defaults from the spec
+        assert cfg.cardiologist.provider == "openai"
+        assert cfg.cardiologist.model == "gpt-4.1-mini"
+        assert cfg.cardiologist.api_key_env == "OPENAI_API_KEY"
+
+        assert cfg.neurologist.provider == "ollama"
+        assert cfg.neurologist.model == "qwen3:4b"
+        assert cfg.neurologist.endpoint == "http://localhost:11434/v1"
+
+        assert cfg.budgets.daily_external_usd == 5.0
+        assert cfg.budgets.autonomous_ab_usd == 2.0
+
+        assert cfg.evidence.db_path == "~/.3surgeons/evidence.db"
+
+
+class TestApiKey:
+    """Test API key retrieval from environment variables."""
+
+    def test_api_key_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Set env var, verify get_api_key() returns it."""
+        monkeypatch.setenv("TEST_API_KEY_XYZ", "sk-test-key-long-enough")
+        surgeon = SurgeonConfig(
+            provider="openai",
+            endpoint="https://api.openai.com/v1",
+            model="gpt-4.1-mini",
+            api_key_env="TEST_API_KEY_XYZ",
+            role="test",
+        )
+        assert surgeon.get_api_key() == "sk-test-key-long-enough"
+
+    def test_api_key_missing_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env var set, verify get_api_key() returns None."""
+        monkeypatch.delenv("NONEXISTENT_KEY_VAR", raising=False)
+        surgeon = SurgeonConfig(
+            provider="openai",
+            endpoint="https://api.openai.com/v1",
+            model="gpt-4.1-mini",
+            api_key_env="NONEXISTENT_KEY_VAR",
+            role="test",
+        )
+        assert surgeon.get_api_key() is None
+
+    def test_api_key_too_short_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Env var exists but value is <6 chars, verify get_api_key() returns None."""
+        monkeypatch.setenv("SHORT_KEY_VAR", "abc")
+        surgeon = SurgeonConfig(
+            provider="openai",
+            endpoint="https://api.openai.com/v1",
+            model="gpt-4.1-mini",
+            api_key_env="SHORT_KEY_VAR",
+            role="test",
+        )
+        assert surgeon.get_api_key() is None
+
+
+class TestConfigDiscovery:
+    """Test configuration discovery order."""
+
+    def test_config_discovery_order(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Create both home and project configs, verify project takes priority."""
+        # Set up fake home dir with config
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        home_config_dir = fake_home / ".3surgeons"
+        home_config_dir.mkdir()
+        home_config = home_config_dir / "config.yaml"
+        home_config.write_text(yaml.dump({
+            "surgeons": {
+                "cardiologist": {
+                    "model": "gpt-4o-from-home",
+                },
+            },
+        }))
+
+        # Set up project dir with config (should take priority)
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        project_config = project_dir / ".3surgeons.yaml"
+        project_config.write_text(yaml.dump({
+            "surgeons": {
+                "cardiologist": {
+                    "model": "gpt-4o-from-project",
+                },
+            },
+        }))
+
+        # Patch HOME so discover() finds our fake home
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        cfg = Config.discover(project_dir=project_dir)
+
+        # Project config should win over home config
+        assert cfg.cardiologist.model == "gpt-4o-from-project"
+
+    def test_config_discovery_falls_to_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No project config, verify home config is used."""
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        home_config_dir = fake_home / ".3surgeons"
+        home_config_dir.mkdir()
+        home_config = home_config_dir / "config.yaml"
+        home_config.write_text(yaml.dump({
+            "surgeons": {
+                "cardiologist": {
+                    "model": "gpt-4o-from-home",
+                },
+            },
+        }))
+
+        # Project dir exists but has no .3surgeons.yaml
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        cfg = Config.discover(project_dir=project_dir)
+
+        assert cfg.cardiologist.model == "gpt-4o-from-home"
+
+    def test_config_discovery_falls_to_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No config files anywhere, verify defaults are returned."""
+        fake_home = tmp_path / "empty_home"
+        fake_home.mkdir()
+
+        project_dir = tmp_path / "empty_project"
+        project_dir.mkdir()
+
+        monkeypatch.setenv("HOME", str(fake_home))
+
+        cfg = Config.discover(project_dir=project_dir)
+
+        # Should be defaults
+        assert cfg.cardiologist.model == "gpt-4.1-mini"
+        assert cfg.neurologist.model == "qwen3:4b"
+
+
+class TestEvidencePath:
+    """Test evidence config path resolution."""
+
+    def test_resolved_path_expands_user(self) -> None:
+        """Verify resolved_path expands ~ to actual home directory."""
+        from three_surgeons.core.config import EvidenceConfig
+
+        evidence = EvidenceConfig(db_path="~/.3surgeons/evidence.db")
+        resolved = evidence.resolved_path
+        assert isinstance(resolved, Path)
+        assert "~" not in str(resolved)
+        assert str(resolved).endswith(".3surgeons/evidence.db")
+
+
+class TestGatesConfig:
+    """Test gates configuration defaults."""
+
+    def test_default_gates(self) -> None:
+        """Verify default gates checks list."""
+        from three_surgeons.core.config import GatesConfig
+
+        gates = GatesConfig()
+        assert "neurologist_health" in gates.gains_gate_checks
+        assert "cardiologist_health" in gates.gains_gate_checks
+        assert "evidence_store" in gates.gains_gate_checks
