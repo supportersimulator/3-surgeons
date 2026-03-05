@@ -1,0 +1,12 @@
+{
+  "name": "3-surgeons",
+  "description": "Multi-model consensus system — 3 LLMs cross-examine each other to catch blind spots on critical decisions",
+  "version": "0.1.0",
+  "author": {
+    "name": "Aaron Tjomsland",
+    "email": "aaron@ersimulator.com"
+  },
+  "repository": "https://github.com/supportersimulator/3-surgeons",
+  "license": "MIT",
+  "keywords": ["multi-model", "consensus", "cross-examination", "quality-gates", "a-b-testing"]
+}
