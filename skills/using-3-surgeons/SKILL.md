@@ -105,3 +105,47 @@ Key settings:
 ## Evidence Store
 
 All cross-examinations, cost tracking, A/B results, and learnings are persisted to `~/.3surgeons/evidence.db` (SQLite with FTS5). This provides institutional memory across sessions -- the system learns from its own decisions.
+
+## Supported Providers
+
+Any endpoint implementing the OpenAI `/v1/chat/completions` API works with zero code changes.
+
+| Provider | Endpoint | Models | API Key Env | Cost |
+|----------|----------|--------|-------------|------|
+| **OpenAI** | `https://api.openai.com/v1` | gpt-4.1-mini, gpt-4.1, o3 | `OPENAI_API_KEY` | $0.10-8.00/1M |
+| **DeepSeek** | `https://api.deepseek.com/v1` | deepseek-chat, deepseek-reasoner | `DEEPSEEK_API_KEY` | $0.27-2.19/1M |
+| **Groq** | `https://api.groq.com/openai/v1` | llama-3.3-70b, llama-3.1-8b | `GROQ_API_KEY` | $0.05-0.79/1M |
+| **xAI (Grok)** | `https://api.x.ai/v1` | grok-2, grok-2-mini | `XAI_API_KEY` | $0.30-10.00/1M |
+| **Mistral** | `https://api.mistral.ai/v1` | mistral-large, mistral-small | `MISTRAL_API_KEY` | $0.10-6.00/1M |
+| **Ollama** | `http://localhost:11434/v1` | Any pulled model | none | $0 (local) |
+| **LM Studio** | `http://localhost:1234/v1` | Any loaded model | none | $0 (local) |
+| **vLLM** | `http://localhost:8000/v1` | Any served model | none | $0 (local) |
+
+### Quick Provider Swap Examples
+
+**DeepSeek as Neurologist** (cheap API, no local LLM needed):
+```yaml
+neurologist:
+  provider: deepseek
+  endpoint: https://api.deepseek.com/v1
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY
+```
+
+**Groq as Cardiologist** (ultra-fast inference):
+```yaml
+cardiologist:
+  provider: groq
+  endpoint: https://api.groq.com/openai/v1
+  model: llama-3.3-70b-versatile
+  api_key_env: GROQ_API_KEY
+```
+
+**Grok as Cardiologist** (xAI alternative):
+```yaml
+cardiologist:
+  provider: xai
+  endpoint: https://api.x.ai/v1
+  model: grok-2
+  api_key_env: XAI_API_KEY
+```

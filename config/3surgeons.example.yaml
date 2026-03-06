@@ -1,17 +1,30 @@
-# Copy to ~/.3surgeons/config.yaml or .3surgeons.yaml in project root
+# 3-Surgeons Configuration
+# Copy to ~/.3surgeons/config.yaml or .3surgeons.yaml in project root.
+# Or use a preset: cp config/presets/hybrid.yaml ~/.3surgeons/config.yaml
+
 surgeons:
   # Atlas (Head Surgeon) is the Claude session itself — no config needed.
+
   cardiologist:
     role: "External perspective — cross-examination, evidence"
+    # Supported providers: openai, deepseek, groq, mistral, xai, ollama, mlx, local
     provider: openai
     endpoint: https://api.openai.com/v1
     model: gpt-4.1-mini
     api_key_env: OPENAI_API_KEY
+
   neurologist:
     role: "Local intelligence — pattern recognition, corrigibility"
     provider: ollama
     endpoint: http://localhost:11434/v1
     model: qwen3:4b
+    # api_key_env: not needed for local models
+
+# State backend: sqlite (default, zero deps) | redis (distributed) | memory (testing)
+state:
+  backend: sqlite
+  sqlite_path: ~/.3surgeons/state.db
+  # redis_url: redis://localhost:6379/0  # uncomment if backend: redis
 
 budgets:
   daily_external_usd: 5.0
