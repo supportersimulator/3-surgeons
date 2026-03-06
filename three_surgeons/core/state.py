@@ -55,6 +55,51 @@ class StateBackend(ABC):
     def release_lock(self, name: str) -> None:
         """Release a named lock. No-op if not held."""
 
+    # ── Sorted Sets ──────────────────────────────────────────────────
+
+    @abstractmethod
+    def sorted_set_add(self, key: str, member: str, score: float) -> None:
+        """Add member with score (like Redis ZADD). Updates score if member exists."""
+
+    @abstractmethod
+    def sorted_set_range(
+        self, key: str, min_score: float, max_score: float, limit: int = 0
+    ) -> List[Tuple[str, float]]:
+        """Return members with scores in [min_score, max_score], ordered by score.
+
+        limit=0 means no limit. Returns list of (member, score) tuples.
+        """
+
+    @abstractmethod
+    def sorted_set_remove(self, key: str, member: str) -> None:
+        """Remove member from sorted set. No-op if missing."""
+
+    @abstractmethod
+    def sorted_set_count(self, key: str) -> int:
+        """Return number of members in sorted set."""
+
+    # ── Hashes ────────────────────────────────────────────────────────
+
+    @abstractmethod
+    def hash_set(self, key: str, field: str, value: str) -> None:
+        """Set field in hash (like Redis HSET)."""
+
+    @abstractmethod
+    def hash_get(self, key: str, field: str) -> Optional[str]:
+        """Get field from hash. Returns None if missing."""
+
+    @abstractmethod
+    def hash_get_all(self, key: str) -> Dict[str, str]:
+        """Get all fields from hash. Returns empty dict if missing."""
+
+    @abstractmethod
+    def hash_delete(self, key: str, field: str) -> None:
+        """Delete field from hash. No-op if missing."""
+
+    @abstractmethod
+    def hash_increment(self, key: str, field: str, amount: int = 1) -> int:
+        """Atomically increment hash field. Initializes to 0 if missing. Returns new value."""
+
     @abstractmethod
     def ping(self) -> bool:
         """Health check. Returns True if backend is operational."""
@@ -70,6 +115,8 @@ class MemoryBackend(StateBackend):
     def __init__(self) -> None:
         self._kv: Dict[str, Tuple[str, Optional[float]]] = {}
         self._lists: Dict[str, List[str]] = {}
+        self._sorted_sets: Dict[str, Dict[str, float]] = {}
+        self._hashes: Dict[str, Dict[str, str]] = {}
         self._locks: Dict[str, float] = {}
         self._mutex = threading.Lock()
 
@@ -119,6 +166,51 @@ class MemoryBackend(StateBackend):
             self._lists[key] = lst[start:]
         else:
             self._lists[key] = lst[start : stop + 1]
+
+    def sorted_set_add(self, key: str, member: str, score: float) -> None:
+        if key not in self._sorted_sets:
+            self._sorted_sets[key] = {}
+        self._sorted_sets[key][member] = score
+
+    def sorted_set_range(
+        self, key: str, min_score: float, max_score: float, limit: int = 0
+    ) -> List[Tuple[str, float]]:
+        ss = self._sorted_sets.get(key, {})
+        items = sorted(
+            ((m, s) for m, s in ss.items() if min_score <= s <= max_score),
+            key=lambda x: x[1],
+        )
+        if limit > 0:
+            items = items[:limit]
+        return items
+
+    def sorted_set_remove(self, key: str, member: str) -> None:
+        if key in self._sorted_sets:
+            self._sorted_sets[key].pop(member, None)
+
+    def sorted_set_count(self, key: str) -> int:
+        return len(self._sorted_sets.get(key, {}))
+
+    def hash_set(self, key: str, field: str, value: str) -> None:
+        if key not in self._hashes:
+            self._hashes[key] = {}
+        self._hashes[key][field] = value
+
+    def hash_get(self, key: str, field: str) -> Optional[str]:
+        return self._hashes.get(key, {}).get(field)
+
+    def hash_get_all(self, key: str) -> Dict[str, str]:
+        return dict(self._hashes.get(key, {}))
+
+    def hash_delete(self, key: str, field: str) -> None:
+        if key in self._hashes:
+            self._hashes[key].pop(field, None)
+
+    def hash_increment(self, key: str, field: str, amount: int = 1) -> int:
+        current = self.hash_get(key, field)
+        new_val = int(current) + amount if current is not None else amount
+        self.hash_set(key, field, str(new_val))
+        return new_val
 
     def acquire_lock(self, name: str, ttl: int = 60) -> bool:
         with self._mutex:
@@ -173,6 +265,26 @@ class SQLiteBackend(StateBackend):
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS ix_lists_key ON lists(key, idx)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS sorted_sets ("
+                "  key TEXT,"
+                "  member TEXT,"
+                "  score REAL,"
+                "  PRIMARY KEY (key, member)"
+                ")"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_sorted_sets_score "
+                "ON sorted_sets(key, score)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS hashes ("
+                "  key TEXT,"
+                "  field TEXT,"
+                "  value TEXT,"
+                "  PRIMARY KEY (key, field)"
+                ")"
             )
             conn.commit()
 
@@ -252,6 +364,91 @@ class SQLiteBackend(StateBackend):
                 )
             conn.commit()
 
+    def sorted_set_add(self, key: str, member: str, score: float) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO sorted_sets (key, member, score) VALUES (?, ?, ?)",
+                (key, member, score),
+            )
+            conn.commit()
+
+    def sorted_set_range(
+        self, key: str, min_score: float, max_score: float, limit: int = 0
+    ) -> List[Tuple[str, float]]:
+        with self._connect() as conn:
+            query = "SELECT member, score FROM sorted_sets WHERE key = ? AND score >= ? AND score <= ? ORDER BY score"
+            params: list = [key, min_score, max_score]
+            if limit > 0:
+                query += " LIMIT ?"
+                params.append(limit)
+            rows = conn.execute(query, params).fetchall()
+        return [(r[0], r[1]) for r in rows]
+
+    def sorted_set_remove(self, key: str, member: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM sorted_sets WHERE key = ? AND member = ?",
+                (key, member),
+            )
+            conn.commit()
+
+    def sorted_set_count(self, key: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM sorted_sets WHERE key = ?", (key,)
+            ).fetchone()
+        return row[0] if row else 0
+
+    def hash_set(self, key: str, field: str, value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO hashes (key, field, value) VALUES (?, ?, ?)",
+                (key, field, value),
+            )
+            conn.commit()
+
+    def hash_get(self, key: str, field: str) -> Optional[str]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT value FROM hashes WHERE key = ? AND field = ?",
+                (key, field),
+            ).fetchone()
+        return row[0] if row else None
+
+    def hash_get_all(self, key: str) -> Dict[str, str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT field, value FROM hashes WHERE key = ?", (key,)
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def hash_delete(self, key: str, field: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM hashes WHERE key = ? AND field = ?",
+                (key, field),
+            )
+            conn.commit()
+
+    def hash_increment(self, key: str, field: str, amount: int = 1) -> int:
+        with self._connect() as conn:
+            # Atomic: INSERT default 0 if missing, then UPDATE in one transaction
+            conn.execute(
+                "INSERT OR IGNORE INTO hashes (key, field, value) VALUES (?, ?, '0')",
+                (key, field),
+            )
+            conn.execute(
+                "UPDATE hashes SET value = CAST(CAST(value AS INTEGER) + ? AS TEXT) "
+                "WHERE key = ? AND field = ?",
+                (amount, key, field),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT value FROM hashes WHERE key = ? AND field = ?",
+                (key, field),
+            ).fetchone()
+        return int(row[0])
+
     def acquire_lock(self, name: str, ttl: int = 60) -> bool:
         lock_key = f"_lock:{name}"
         now = time.time()
@@ -312,6 +509,43 @@ class _RedisBackend(StateBackend):
 
     def list_trim(self, key: str, start: int, stop: int) -> None:
         self._client.ltrim(key, start, stop)
+
+    def sorted_set_add(self, key: str, member: str, score: float) -> None:
+        self._client.zadd(key, {member: score})
+
+    def sorted_set_range(
+        self, key: str, min_score: float, max_score: float, limit: int = 0
+    ) -> List[Tuple[str, float]]:
+        if limit > 0:
+            results = self._client.zrangebyscore(
+                key, min_score, max_score, start=0, num=limit, withscores=True
+            )
+        else:
+            results = self._client.zrangebyscore(
+                key, min_score, max_score, withscores=True
+            )
+        return [(m, s) for m, s in results]
+
+    def sorted_set_remove(self, key: str, member: str) -> None:
+        self._client.zrem(key, member)
+
+    def sorted_set_count(self, key: str) -> int:
+        return self._client.zcard(key)
+
+    def hash_set(self, key: str, field: str, value: str) -> None:
+        self._client.hset(key, field, value)
+
+    def hash_get(self, key: str, field: str) -> Optional[str]:
+        return self._client.hget(key, field)
+
+    def hash_get_all(self, key: str) -> Dict[str, str]:
+        return self._client.hgetall(key)
+
+    def hash_delete(self, key: str, field: str) -> None:
+        self._client.hdel(key, field)
+
+    def hash_increment(self, key: str, field: str, amount: int = 1) -> int:
+        return self._client.hincrby(key, field, amount)
 
     def acquire_lock(self, name: str, ttl: int = 60) -> bool:
         return bool(self._client.set(f"_lock:{name}", "1", nx=True, ex=ttl))

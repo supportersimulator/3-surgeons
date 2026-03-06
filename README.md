@@ -114,6 +114,17 @@ See `config/3surgeons.example.yaml` for the full schema.
 - `.gitignore` excludes all secret files, config files, and databases
 - See `.env.example` for the full list of supported environment variables
 
+## ContextDNA IDE Upgrade
+
+3-Surgeons works standalone. When you're ready for priority queue GPU scheduling, Redis state, and the full butler subconscious, the upgrade is one line:
+
+```python
+from contextdna.adapters import priority_queue_adapter
+provider = LLMProvider(config, query_adapter=priority_queue_adapter)
+```
+
+See [docs/CONTEXTDNA-IDE-UPGRADE.md](docs/CONTEXTDNA-IDE-UPGRADE.md) for the full migration guide.
+
 ## Contributing
 
 1. Fork the repo

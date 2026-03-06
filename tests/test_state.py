@@ -203,3 +203,160 @@ def test_create_backend_from_config_unknown():
     sc = StateConfig(backend="cassandra")
     with pytest.raises(ValueError, match="Unknown backend"):
         create_backend_from_config(sc)
+
+
+# ── Sorted Set Tests ──────────────────────────────────────────────────
+
+
+class TestSortedSetAdd:
+    """Test sorted_set_add: adds member with score."""
+
+    def test_add_single_member(self, backend: StateBackend) -> None:
+        """Add one member, verify it's retrievable."""
+        backend.sorted_set_add("zset", "item_a", 1.0)
+        result = backend.sorted_set_range("zset", 0.0, float("inf"))
+        assert result == [("item_a", 1.0)]
+
+    def test_add_multiple_members_ordered_by_score(self, backend: StateBackend) -> None:
+        """Add members out of order, verify returned sorted by score."""
+        backend.sorted_set_add("zset", "high", 10.0)
+        backend.sorted_set_add("zset", "low", 1.0)
+        backend.sorted_set_add("zset", "mid", 5.0)
+        result = backend.sorted_set_range("zset", 0.0, float("inf"))
+        assert [m for m, s in result] == ["low", "mid", "high"]
+
+    def test_add_updates_score_for_existing_member(self, backend: StateBackend) -> None:
+        """Adding same member again updates its score."""
+        backend.sorted_set_add("zset", "item", 1.0)
+        backend.sorted_set_add("zset", "item", 99.0)
+        result = backend.sorted_set_range("zset", 0.0, float("inf"))
+        assert result == [("item", 99.0)]
+
+
+class TestSortedSetRange:
+    """Test sorted_set_range: retrieves members by score range."""
+
+    def test_range_filters_by_score(self, backend: StateBackend) -> None:
+        """Only members within [min_score, max_score] are returned."""
+        backend.sorted_set_add("zset", "a", 1.0)
+        backend.sorted_set_add("zset", "b", 5.0)
+        backend.sorted_set_add("zset", "c", 10.0)
+        result = backend.sorted_set_range("zset", 3.0, 7.0)
+        assert result == [("b", 5.0)]
+
+    def test_range_with_limit(self, backend: StateBackend) -> None:
+        """Limit restricts number of results."""
+        for i in range(10):
+            backend.sorted_set_add("zset", f"item_{i}", float(i))
+        result = backend.sorted_set_range("zset", 0.0, float("inf"), limit=3)
+        assert len(result) == 3
+
+    def test_range_empty_set_returns_empty(self, backend: StateBackend) -> None:
+        """Range on non-existent key returns empty list."""
+        result = backend.sorted_set_range("nokey", 0.0, float("inf"))
+        assert result == []
+
+
+class TestSortedSetRemove:
+    """Test sorted_set_remove: removes a member by name."""
+
+    def test_remove_existing_member(self, backend: StateBackend) -> None:
+        """Remove a member, verify it's gone."""
+        backend.sorted_set_add("zset", "a", 1.0)
+        backend.sorted_set_add("zset", "b", 2.0)
+        backend.sorted_set_remove("zset", "a")
+        result = backend.sorted_set_range("zset", 0.0, float("inf"))
+        assert result == [("b", 2.0)]
+
+    def test_remove_nonexistent_member(self, backend: StateBackend) -> None:
+        """Removing a member that doesn't exist should not raise."""
+        backend.sorted_set_remove("zset", "ghost")  # Should not raise
+
+
+class TestSortedSetCount:
+    """Test sorted_set_count: returns number of members."""
+
+    def test_count(self, backend: StateBackend) -> None:
+        """Count returns number of members in sorted set."""
+        backend.sorted_set_add("zset", "a", 1.0)
+        backend.sorted_set_add("zset", "b", 2.0)
+        assert backend.sorted_set_count("zset") == 2
+
+    def test_count_empty(self, backend: StateBackend) -> None:
+        """Count on non-existent key returns 0."""
+        assert backend.sorted_set_count("nokey") == 0
+
+
+# ── Hash Tests ────────────────────────────────────────────────────────
+
+
+class TestHashSetGet:
+    """Test hash_set and hash_get: field-level storage."""
+
+    def test_set_and_get_field(self, backend: StateBackend) -> None:
+        """Set a hash field and retrieve it."""
+        backend.hash_set("myhash", "name", "atlas")
+        assert backend.hash_get("myhash", "name") == "atlas"
+
+    def test_get_missing_field_returns_none(self, backend: StateBackend) -> None:
+        """Getting a non-existent field returns None."""
+        assert backend.hash_get("myhash", "missing") is None
+
+    def test_set_overwrites_field(self, backend: StateBackend) -> None:
+        """Setting same field again overwrites."""
+        backend.hash_set("myhash", "key", "first")
+        backend.hash_set("myhash", "key", "second")
+        assert backend.hash_get("myhash", "key") == "second"
+
+    def test_separate_hash_keys(self, backend: StateBackend) -> None:
+        """Different hash keys are independent."""
+        backend.hash_set("hash1", "field", "val1")
+        backend.hash_set("hash2", "field", "val2")
+        assert backend.hash_get("hash1", "field") == "val1"
+        assert backend.hash_get("hash2", "field") == "val2"
+
+
+class TestHashGetAll:
+    """Test hash_get_all: retrieves all fields."""
+
+    def test_get_all_fields(self, backend: StateBackend) -> None:
+        """Returns dict of all field-value pairs."""
+        backend.hash_set("myhash", "a", "1")
+        backend.hash_set("myhash", "b", "2")
+        result = backend.hash_get_all("myhash")
+        assert result == {"a": "1", "b": "2"}
+
+    def test_get_all_empty_returns_empty_dict(self, backend: StateBackend) -> None:
+        """hash_get_all on non-existent key returns empty dict."""
+        result = backend.hash_get_all("nokey")
+        assert result == {}
+
+
+class TestHashDelete:
+    """Test hash_delete: removes a field from a hash."""
+
+    def test_delete_field(self, backend: StateBackend) -> None:
+        """Delete a field, verify it's gone."""
+        backend.hash_set("myhash", "a", "1")
+        backend.hash_set("myhash", "b", "2")
+        backend.hash_delete("myhash", "a")
+        assert backend.hash_get("myhash", "a") is None
+        assert backend.hash_get("myhash", "b") == "2"
+
+    def test_delete_nonexistent_field(self, backend: StateBackend) -> None:
+        """Deleting a field that doesn't exist should not raise."""
+        backend.hash_delete("myhash", "ghost")  # Should not raise
+
+
+class TestHashIncrement:
+    """Test hash_increment: atomically increment a hash field."""
+
+    def test_increment_new_field(self, backend: StateBackend) -> None:
+        """Incrementing a non-existent field initializes to 1."""
+        assert backend.hash_increment("myhash", "counter") == 1
+
+    def test_increment_existing_field(self, backend: StateBackend) -> None:
+        """Incrementing an existing numeric field adds 1."""
+        backend.hash_set("myhash", "counter", "5")
+        assert backend.hash_increment("myhash", "counter") == 6
+        assert backend.hash_get("myhash", "counter") == "6"
