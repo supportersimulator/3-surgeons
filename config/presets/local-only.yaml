@@ -1,0 +1,26 @@
+# 3-Surgeons: Local-Only Mode
+# Both surgeons use local Ollama models. No API keys needed. $0 cost.
+# Required: Ollama installed with models pulled
+#   ollama pull mistral:7b
+#   ollama pull qwen3:4b
+surgeons:
+  cardiologist:
+    role: "External perspective — cross-examination, evidence"
+    provider: ollama
+    endpoint: http://localhost:11434/v1
+    model: mistral:7b
+  neurologist:
+    role: "Local intelligence — pattern recognition, corrigibility"
+    provider: ollama
+    endpoint: http://localhost:11434/v1
+    model: qwen3:4b
+
+state:
+  backend: sqlite
+  sqlite_path: ~/.3surgeons/state.db
+
+budgets:
+  daily_external_usd: 0.0
+
+evidence:
+  db_path: ~/.3surgeons/evidence.db

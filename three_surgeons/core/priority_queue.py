@@ -167,6 +167,13 @@ class GenerationProfiles:
         "deep": {"max_tokens": 2048, "temperature": 0.7},
         "s2_professor": {"max_tokens": 700, "temperature": 0.4},
         "s8_synaptic": {"max_tokens": 1500, "temperature": 0.6},
+        "coding": {"max_tokens": 1024, "temperature": 0.4},
+        "explore": {"max_tokens": 1024, "temperature": 0.5},
+        "reasoning": {"max_tokens": 1024, "temperature": 0.3},
+        "summarize": {"max_tokens": 512, "temperature": 0.3},
+        "s2_professor_brief": {"max_tokens": 700, "temperature": 0.4},
+        "synaptic_chat": {"max_tokens": 1024, "temperature": 0.6},
+        "post_analysis": {"max_tokens": 1500, "temperature": 0.5},
     }
 
     _FALLBACK = "extract"

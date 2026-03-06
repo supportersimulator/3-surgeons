@@ -3,16 +3,18 @@
 Three gate types extracted from gains-gate.sh, cardio-gate.sh, and
 corrigibility-gate.sh -- Python rewrite with configurable checks.
 
-- GainsGate: verifies infrastructure health (state, evidence, endpoints)
+- GainsGate: verifies infrastructure health (state, evidence, endpoints, GPU lock, LLM, criticals)
 - CardioGate: chains rate-limit check + gains gate + optional cross-exam
-- CorrigibilityGate: checks proposed actions against safety invariants
+- CorrigibilityGate: checks proposed actions against safety invariants + structural integrity
 """
 from __future__ import annotations
 
+import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 from three_surgeons.core.config import Config
 from three_surgeons.core.evidence import EvidenceStore
@@ -74,6 +76,9 @@ class GainsGate:
             "cardiologist_health": self._check_cardiologist_health,
             "evidence_store": self._check_evidence_store,
             "state_backend": self._check_state_backend,
+            "gpu_lock_stale": self._check_gpu_lock_stale,
+            "llm_test_query": self._check_llm_test_query,
+            "critical_findings": self._check_critical_findings,
         }
 
     def run(self) -> GateResult:
@@ -229,6 +234,116 @@ class GainsGate:
                 critical=True,
             )
 
+    def _check_gpu_lock_stale(self) -> CheckResult:
+        """Check if GPU lock file is stale (held by dead PID). Critical."""
+        lock_path = self._config.gpu_lock_path
+        if lock_path is None:
+            return CheckResult(
+                name="gpu_lock_stale",
+                passed=True,
+                message="GPU lock path not configured (skipped)",
+                critical=False,
+            )
+        try:
+            path = Path(lock_path)
+            if not path.exists():
+                return CheckResult(
+                    name="gpu_lock_stale",
+                    passed=True,
+                    message="GPU lock free",
+                    critical=True,
+                )
+            pid_str = path.read_text().strip()
+            if not pid_str:
+                return CheckResult(
+                    name="gpu_lock_stale",
+                    passed=False,
+                    message="GPU lock file empty (stale)",
+                    critical=True,
+                )
+            pid = int(pid_str)
+            try:
+                os.kill(pid, 0)
+                return CheckResult(
+                    name="gpu_lock_stale",
+                    passed=True,
+                    message=f"GPU lock held by PID {pid} (alive)",
+                    critical=True,
+                )
+            except OSError:
+                return CheckResult(
+                    name="gpu_lock_stale",
+                    passed=False,
+                    message=f"GPU lock stale: PID {pid} dead",
+                    critical=True,
+                )
+        except Exception as exc:
+            return CheckResult(
+                name="gpu_lock_stale",
+                passed=False,
+                message=f"GPU lock check error: {exc}",
+                critical=True,
+            )
+
+    def _check_llm_test_query(self) -> CheckResult:
+        """Send a trivial test query to the neurologist. Non-critical."""
+        try:
+            from three_surgeons.core.models import LLMProvider
+
+            provider = LLMProvider(self._config.neurologist)
+            resp = provider.query(
+                system="Respond with OK.",
+                prompt="Health check",
+                max_tokens=8,
+                temperature=0.0,
+            )
+            if resp.ok:
+                return CheckResult(
+                    name="llm_test_query",
+                    passed=True,
+                    message=f"LLM test query OK ({resp.latency_ms}ms)",
+                    critical=False,
+                )
+            return CheckResult(
+                name="llm_test_query",
+                passed=False,
+                message=f"LLM test query failed: {resp.content[:100]}",
+                critical=False,
+            )
+        except Exception as exc:
+            return CheckResult(
+                name="llm_test_query",
+                passed=False,
+                message=f"LLM test query error: {exc}",
+                critical=False,
+            )
+
+    def _check_critical_findings(self) -> CheckResult:
+        """Check for unresolved critical findings. Critical -- must be 0."""
+        try:
+            count_str = self._state.get("critical_findings:count")
+            count = int(count_str) if count_str is not None else 0
+            if count == 0:
+                return CheckResult(
+                    name="critical_findings",
+                    passed=True,
+                    message="No unresolved critical findings",
+                    critical=True,
+                )
+            return CheckResult(
+                name="critical_findings",
+                passed=False,
+                message=f"{count} unresolved critical findings",
+                critical=True,
+            )
+        except Exception as exc:
+            return CheckResult(
+                name="critical_findings",
+                passed=True,
+                message=f"Critical findings check error (defaulting pass): {exc}",
+                critical=True,
+            )
+
 
 # ── CardioGate ────────────────────────────────────────────────────────
 
@@ -381,23 +496,37 @@ _DEFAULT_INVARIANTS: List[tuple] = [
 
 
 class CorrigibilityGate:
-    """Checks proposed actions against safety invariants.
+    """Checks proposed actions against safety invariants + structural integrity.
 
     From corrigibility-gate.sh: ensures proposed actions do not violate
-    safety rules. Returns pass/fail with reasoning.
+    safety rules AND system integrity invariants hold.
 
-    Default invariants (configurable):
+    Text safety invariants (configurable):
     - No destructive operations without explicit approval
     - No bypassing safety constraints
     - No modifying gate logic itself
+    - No force-pushing without explicit approval
+
+    Structural integrity invariants (via check_integrity):
+    - events_monotonic: event count never decreases
+    - learnings_preserved: learning count never decreases
+    - evidence_grades_preserved: evidence grades never decrease
+    - service_health: key services are operational
     """
 
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self,
+        config: Config,
+        state: Optional[StateBackend] = None,
+        evidence: Optional[EvidenceStore] = None,
+    ) -> None:
         self._config = config
+        self._state = state
+        self._evidence = evidence
         self._invariants = list(_DEFAULT_INVARIANTS)
 
     def run(self, proposed_action: str) -> GateResult:
-        """Check proposed action against invariants. Returns GateResult.
+        """Check proposed action against text safety invariants. Returns GateResult.
 
         Each invariant is tested independently. Gate passes only if no
         invariants are violated.
@@ -443,3 +572,125 @@ class CorrigibilityGate:
             summary=summary,
             duration_ms=duration_ms,
         )
+
+    def check_integrity(self) -> GateResult:
+        """Check structural integrity invariants against state backend.
+
+        Verifies that critical counters never decrease (events, learnings,
+        evidence grades) and key services are operational.
+
+        Returns GateResult. Gate passes only if all integrity checks pass.
+        """
+        t0 = time.monotonic()
+        checks: List[CheckResult] = []
+
+        if self._state is not None:
+            checks.append(self._check_monotonic("events_count", "events_monotonic"))
+            checks.append(self._check_monotonic("learnings_count", "learnings_preserved"))
+            checks.append(self._check_monotonic("evidence_grade_sum", "evidence_grades_preserved"))
+            checks.append(self._check_service_health())
+        else:
+            checks.append(
+                CheckResult(
+                    name="integrity_skipped",
+                    passed=True,
+                    message="No state backend -- integrity checks skipped",
+                    critical=False,
+                )
+            )
+
+        if self._evidence is not None:
+            checks.append(self._check_evidence_operational())
+
+        duration_ms = (time.monotonic() - t0) * 1000
+
+        violations = [c for c in checks if c.critical and not c.passed]
+        passed = len(violations) == 0
+
+        if passed:
+            summary = f"INTEGRITY PASS: {len(checks)} checks passed"
+        else:
+            reasons = [c.message for c in violations]
+            summary = f"INTEGRITY FAIL: {'; '.join(reasons)}"
+
+        return GateResult(
+            passed=passed,
+            checks=checks,
+            summary=summary,
+            duration_ms=duration_ms,
+        )
+
+    def _check_monotonic(self, counter_key: str, check_name: str) -> CheckResult:
+        """Verify a counter in state backend never decreases."""
+        try:
+            current_str = self._state.get(f"integrity:{counter_key}")
+            previous_str = self._state.get(f"integrity:{counter_key}:prev")
+
+            if current_str is None:
+                return CheckResult(
+                    name=check_name,
+                    passed=True,
+                    message=f"{check_name}: no data yet (OK)",
+                    critical=True,
+                )
+
+            current = int(current_str)
+            if previous_str is not None:
+                previous = int(previous_str)
+                if current < previous:
+                    return CheckResult(
+                        name=check_name,
+                        passed=False,
+                        message=f"{check_name}: decreased from {previous} to {current}",
+                        critical=True,
+                    )
+
+            return CheckResult(
+                name=check_name,
+                passed=True,
+                message=f"{check_name}: {current} (monotonic OK)",
+                critical=True,
+            )
+        except (TypeError, ValueError) as exc:
+            return CheckResult(
+                name=check_name,
+                passed=True,
+                message=f"{check_name}: parse error (defaulting pass): {exc}",
+                critical=True,
+            )
+
+    def _check_service_health(self) -> CheckResult:
+        """Verify state backend is responsive."""
+        try:
+            alive = self._state.ping()
+            return CheckResult(
+                name="service_health",
+                passed=alive,
+                message="State backend operational" if alive else "State backend down",
+                critical=True,
+            )
+        except Exception as exc:
+            return CheckResult(
+                name="service_health",
+                passed=False,
+                message=f"Service health error: {exc}",
+                critical=True,
+            )
+
+    def _check_evidence_operational(self) -> CheckResult:
+        """Verify evidence store is accessible."""
+        try:
+            stats = self._evidence.get_stats()
+            return CheckResult(
+                name="evidence_operational",
+                passed=True,
+                message=f"Evidence store: {stats.get('total', 0)} items",
+                critical=True,
+            )
+        except Exception as exc:
+            return CheckResult(
+                name="evidence_operational",
+                passed=False,
+                message=f"Evidence store error: {exc}",
+                critical=True,
+            )

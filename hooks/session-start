@@ -2,17 +2,49 @@
 # 3-Surgeons Session Start Hook
 # Injects the using-3-surgeons skill into the session context
 
-PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+set -euo pipefail
+
+# Determine plugin root directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 SKILL_FILE="${PLUGIN_ROOT}/skills/using-3-surgeons/SKILL.md"
 
 if [ ! -f "$SKILL_FILE" ]; then
-    echo '{"additionalContext": "3-Surgeons plugin installed but skill file not found."}'
+    echo '{"additional_context": "3-Surgeons plugin installed but skill file not found.", "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "3-Surgeons plugin installed but skill file not found."}}'
     exit 0
 fi
 
-SKILL_CONTENT=$(cat "$SKILL_FILE")
+# Read skill content
+skill_content=$(cat "$SKILL_FILE" 2>&1 || echo "Error reading using-3-surgeons skill")
 
-# Output JSON with the skill content wrapped in importance tags
+# Escape string for JSON embedding using bash parameter substitution.
+# Each ${s//old/new} is a single C-level pass — fast and correct.
+escape_for_json() {
+    local s="$1"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    s="${s//$'\n'/\\n}"
+    s="${s//$'\r'/\\r}"
+    s="${s//$'\t'/\\t}"
+    printf '%s' "$s"
+}
+
+skill_escaped=$(escape_for_json "$skill_content")
+session_context="<EXTREMELY_IMPORTANT>\nYou have 3-Surgeons installed.\n\n**Below is the full content of your '3-surgeons:using-3-surgeons' skill — your introduction to the multi-model consensus system. For all other skills, use the 'Skill' tool:**\n\n${skill_escaped}\n</EXTREMELY_IMPORTANT>"
+
+# Output context injection as JSON.
+# Keep both shapes for compatibility:
+# - Cursor hooks expect additional_context.
+# - Claude Code hooks expect hookSpecificOutput.additionalContext.
 cat <<EOF
-{"additionalContext": "<EXTREMELY_IMPORTANT>\nYou have 3-Surgeons installed.\n\n${SKILL_CONTENT}\n</EXTREMELY_IMPORTANT>"}
+{
+  "additional_context": "${session_context}",
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "${session_context}"
+  }
+}
 EOF
+
+exit 0

@@ -228,3 +228,62 @@ class TestGatesConfig:
         assert "neurologist_health" in gates.gains_gate_checks
         assert "cardiologist_health" in gates.gains_gate_checks
         assert "evidence_store" in gates.gains_gate_checks
+
+
+def test_state_config_defaults():
+    """StateConfig should default to sqlite backend."""
+    from three_surgeons.core.config import StateConfig
+    sc = StateConfig()
+    assert sc.backend == "sqlite"
+    assert sc.sqlite_path == "~/.3surgeons/state.db"
+    assert sc.redis_url == "redis://localhost:6379/0"
+
+
+def test_state_config_resolved_sqlite_path():
+    from three_surgeons.core.config import StateConfig
+    sc = StateConfig()
+    resolved = sc.resolved_sqlite_path
+    assert "~" not in str(resolved)
+    assert str(resolved).endswith("state.db")
+
+
+def test_config_has_state():
+    from three_surgeons.core.config import Config
+    cfg = Config()
+    assert cfg.state.backend == "sqlite"
+
+
+def test_config_from_yaml_with_state(tmp_path):
+    from three_surgeons.core.config import Config
+    yaml_file = tmp_path / "test.yaml"
+    yaml_file.write_text("state:\n  backend: redis\n  redis_url: redis://myhost:6380/1\n")
+    cfg = Config.from_yaml(yaml_file)
+    assert cfg.state.backend == "redis"
+    assert cfg.state.redis_url == "redis://myhost:6380/1"
+
+
+def test_preset_api_only_loads():
+    from three_surgeons.core.config import Config
+    preset = Path(__file__).parent.parent / "config" / "presets" / "api-only.yaml"
+    assert preset.exists(), "api-only.yaml preset missing"
+    cfg = Config.from_yaml(preset)
+    assert cfg.cardiologist.provider == "openai"
+    assert cfg.neurologist.api_key_env == "DEEPSEEK_API_KEY"
+
+
+def test_preset_local_only_loads():
+    from three_surgeons.core.config import Config
+    preset = Path(__file__).parent.parent / "config" / "presets" / "local-only.yaml"
+    assert preset.exists(), "local-only.yaml preset missing"
+    cfg = Config.from_yaml(preset)
+    assert cfg.cardiologist.provider == "ollama"
+    assert cfg.neurologist.provider == "ollama"
+
+
+def test_preset_hybrid_loads():
+    from three_surgeons.core.config import Config
+    preset = Path(__file__).parent.parent / "config" / "presets" / "hybrid.yaml"
+    assert preset.exists(), "hybrid.yaml preset missing"
+    cfg = Config.from_yaml(preset)
+    assert cfg.cardiologist.provider == "openai"
+    assert cfg.neurologist.provider == "ollama"

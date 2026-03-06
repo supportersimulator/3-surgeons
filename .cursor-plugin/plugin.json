@@ -1,5 +1,6 @@
 {
   "name": "3-surgeons",
+  "displayName": "3-Surgeons",
   "description": "Multi-model consensus system — 3 LLMs cross-examine each other to catch blind spots on critical decisions",
   "version": "1.0.0",
   "author": {
@@ -10,11 +11,8 @@
   "repository": "https://github.com/supportersimulator/3-surgeons",
   "license": "MIT",
   "keywords": ["multi-model", "consensus", "cross-examination", "quality-gates", "a-b-testing"],
-  "mcpServers": {
-    "3-surgeons": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/bin/3surgeons-mcp",
-      "args": [],
-      "env": {}
-    }
-  }
+  "skills": "./skills/",
+  "agents": "./agents/",
+  "commands": "./commands/",
+  "hooks": "./hooks/hooks.json"
 }

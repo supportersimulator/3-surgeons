@@ -13,11 +13,15 @@ import logging
 from typing import Optional
 
 from three_surgeons.core.ab_testing import ABTestEngine
+from three_surgeons.core.cardio import ab_validate, cardio_review
 from three_surgeons.core.config import Config
 from three_surgeons.core.cross_exam import SurgeryTeam
+from three_surgeons.core.direct import ask_local, ask_remote
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.gates import GainsGate
 from three_surgeons.core.models import LLMProvider
+from three_surgeons.core.neurologist import introspect, neurologist_challenge, neurologist_pulse
+from three_surgeons.core.research import research as research_fn
 from three_surgeons.core.sentinel import Sentinel
 from three_surgeons.core.state import MemoryBackend
 
@@ -36,6 +40,14 @@ TOOL_NAMES: list[str] = [
     "ab_start",
     "ab_measure",
     "ab_conclude",
+    "neurologist_pulse_tool",
+    "neurologist_challenge_tool",
+    "introspect_tool",
+    "ask_local_tool",
+    "ask_remote_tool",
+    "cardio_review_tool",
+    "ab_validate_tool",
+    "research_tool",
 ]
 
 # ── Dependency builders (thin, testable seams) ──────────────────────────
@@ -242,6 +254,123 @@ def _ab_conclude(test_id: str, verdict: str) -> dict:
         return {"error": str(exc)}
 
 
+def _neurologist_pulse_impl() -> dict:
+    """System health pulse check via neurologist."""
+    config = _build_config()
+    neuro = LLMProvider(config.neurologist)
+    state = _build_state()
+    evidence = _build_evidence(config)
+    result = neurologist_pulse(
+        neuro, state_backend=state, evidence_store=evidence,
+        gpu_lock_path=config.gpu_lock_path,
+    )
+    return {
+        "healthy": result.healthy,
+        "summary": result.summary,
+        "checks": {
+            name: {"ok": c.ok, "detail": c.detail, "latency_ms": c.latency_ms}
+            for name, c in result.checks.items()
+        },
+    }
+
+
+def _neurologist_challenge_impl(topic: str) -> dict:
+    """Corrigibility skeptic challenge."""
+    config = _build_config()
+    neuro = LLMProvider(config.neurologist)
+    evidence = _build_evidence(config)
+    result = neurologist_challenge(topic, neuro, evidence_store=evidence)
+    return {
+        "topic": result.topic,
+        "challenges": [
+            {
+                "claim": c.claim,
+                "challenge": c.challenge,
+                "severity": c.severity,
+                "suggested_test": c.suggested_test,
+            }
+            for c in result.challenges
+        ],
+    }
+
+
+def _introspect_impl() -> dict:
+    """Ask each surgeon to self-report capabilities."""
+    config = _build_config()
+    providers = {}
+    for name, cfg in [("cardiologist", config.cardiologist), ("neurologist", config.neurologist)]:
+        try:
+            providers[name] = LLMProvider(cfg)
+        except Exception:
+            pass
+    results = introspect(providers)
+    return {
+        name: {
+            "model": r.model,
+            "capabilities": r.capabilities,
+            "limitations": r.limitations,
+            "ok": r.ok,
+            "latency_ms": r.latency_ms,
+        }
+        for name, r in results.items()
+    }
+
+
+def _ask_local_impl(prompt: str) -> dict:
+    """Direct query to the neurologist."""
+    config = _build_config()
+    neuro = LLMProvider(config.neurologist)
+    resp = ask_local(prompt, neuro)
+    return {"ok": resp.ok, "content": resp.content}
+
+
+def _ask_remote_impl(prompt: str) -> dict:
+    """Direct query to the cardiologist."""
+    config = _build_config()
+    cardio = LLMProvider(config.cardiologist)
+    resp = ask_remote(prompt, cardio)
+    return {"ok": resp.ok, "content": resp.content, "cost_usd": resp.cost_usd}
+
+
+def _cardio_review_impl(topic: str, git_context: Optional[str] = None) -> dict:
+    """Cardiologist cross-examination review."""
+    team = _build_surgery_team()
+    evidence = _build_evidence()
+    result = cardio_review(topic, team, evidence_store=evidence, git_context=git_context)
+    return {
+        "topic": result.topic,
+        "cardiologist_findings": result.cardiologist_findings,
+        "neurologist_blind_spots": result.neurologist_blind_spots,
+        "synthesis": result.synthesis,
+        "dissent": result.dissent,
+        "recommendations": result.recommendations,
+    }
+
+
+def _ab_validate_impl(description: str) -> dict:
+    """Quick 3-surgeon fix validation."""
+    team = _build_surgery_team()
+    result = ab_validate(description, team)
+    return {
+        "verdict": result.verdict,
+        "reasoning": result.reasoning,
+        "surgeon_votes": result.surgeon_votes,
+    }
+
+
+def _research_impl(topic: str) -> dict:
+    """Self-directed research."""
+    config = _build_config()
+    cardio = LLMProvider(config.cardiologist)
+    result = research_fn(topic, cardio)
+    return {
+        "topic": result.topic,
+        "findings": result.findings,
+        "sources": result.sources,
+        "cost_usd": result.cost_usd,
+    }
+
+
 # ── FastMCP wiring (optional -- gracefully degrades) ────────────────────
 
 _mcp_app = None
@@ -307,6 +436,46 @@ try:
     def ab_conclude(test_id: str, verdict: str) -> dict:
         """Conclude an A/B test."""
         return _ab_conclude(test_id, verdict=verdict)
+
+    @_mcp_app.tool()
+    def neurologist_pulse_tool() -> dict:
+        """System health pulse check via neurologist."""
+        return _neurologist_pulse_impl()
+
+    @_mcp_app.tool()
+    def neurologist_challenge_tool(topic: str) -> dict:
+        """Corrigibility skeptic challenge on a topic."""
+        return _neurologist_challenge_impl(topic)
+
+    @_mcp_app.tool()
+    def introspect_tool() -> dict:
+        """Ask each surgeon to self-report capabilities."""
+        return _introspect_impl()
+
+    @_mcp_app.tool()
+    def ask_local_tool(prompt: str) -> dict:
+        """Direct query to the neurologist (local model)."""
+        return _ask_local_impl(prompt)
+
+    @_mcp_app.tool()
+    def ask_remote_tool(prompt: str) -> dict:
+        """Direct query to the cardiologist (remote model)."""
+        return _ask_remote_impl(prompt)
+
+    @_mcp_app.tool()
+    def cardio_review_tool(topic: str, git_context: str = "") -> dict:
+        """Cardiologist cross-examination review."""
+        return _cardio_review_impl(topic, git_context=git_context or None)
+
+    @_mcp_app.tool()
+    def ab_validate_tool(description: str) -> dict:
+        """Quick 3-surgeon fix validation."""
+        return _ab_validate_impl(description)
+
+    @_mcp_app.tool()
+    def research_tool(topic: str) -> dict:
+        """Self-directed research on a topic."""
+        return _research_impl(topic)
 
 except ImportError:
     # mcp SDK not installed -- tools are still usable as plain functions

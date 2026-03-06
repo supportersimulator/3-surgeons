@@ -178,3 +178,28 @@ class TestFactory:
         """Factory with unknown type raises ValueError."""
         with pytest.raises(ValueError, match="Unknown backend"):
             create_backend("cassandra")
+
+
+def test_create_backend_from_config_sqlite(tmp_path):
+    from three_surgeons.core.config import StateConfig
+    from three_surgeons.core.state import create_backend_from_config
+    sc = StateConfig(backend="sqlite", sqlite_path=str(tmp_path / "test.db"))
+    backend = create_backend_from_config(sc)
+    assert backend.ping()
+
+
+def test_create_backend_from_config_memory():
+    from three_surgeons.core.config import StateConfig
+    from three_surgeons.core.state import create_backend_from_config
+    sc = StateConfig(backend="memory")
+    backend = create_backend_from_config(sc)
+    assert backend.ping()
+
+
+def test_create_backend_from_config_unknown():
+    import pytest
+    from three_surgeons.core.config import StateConfig
+    from three_surgeons.core.state import create_backend_from_config
+    sc = StateConfig(backend="cassandra")
+    with pytest.raises(ValueError, match="Unknown backend"):
+        create_backend_from_config(sc)

@@ -1,0 +1,26 @@
+# 3-Surgeons: API-Only Mode
+# Both surgeons use cloud APIs. No local LLM needed.
+# Required env vars: OPENAI_API_KEY, DEEPSEEK_API_KEY
+surgeons:
+  cardiologist:
+    role: "External perspective — cross-examination, evidence"
+    provider: openai
+    endpoint: https://api.openai.com/v1
+    model: gpt-4.1-mini
+    api_key_env: OPENAI_API_KEY
+  neurologist:
+    role: "Second opinion — pattern recognition, corrigibility"
+    provider: deepseek
+    endpoint: https://api.deepseek.com/v1
+    model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+
+state:
+  backend: sqlite
+  sqlite_path: ~/.3surgeons/state.db
+
+budgets:
+  daily_external_usd: 5.0
+
+evidence:
+  db_path: ~/.3surgeons/evidence.db

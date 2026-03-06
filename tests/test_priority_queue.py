@@ -85,11 +85,34 @@ class TestGenerationProfiles:
 
     def test_all_profiles_have_required_keys(self) -> None:
         """Every named profile must have max_tokens and temperature."""
-        for name in ("classify", "extract", "extract_deep", "voice",
-                     "deep", "s2_professor", "s8_synaptic"):
+        all_profiles = (
+            "classify", "extract", "extract_deep", "voice",
+            "deep", "s2_professor", "s8_synaptic",
+            "coding", "explore", "reasoning", "summarize",
+            "s2_professor_brief", "synaptic_chat", "post_analysis",
+        )
+        for name in all_profiles:
             params = GenerationProfiles.get(name)
             assert "max_tokens" in params, f"{name} missing max_tokens"
             assert "temperature" in params, f"{name} missing temperature"
+
+    def test_coding_profile(self) -> None:
+        params = GenerationProfiles.get("coding")
+        assert params["max_tokens"] == 1024
+        assert params["temperature"] == 0.4
+
+    def test_summarize_profile(self) -> None:
+        params = GenerationProfiles.get("summarize")
+        assert params["max_tokens"] == 512
+        assert params["temperature"] == 0.3
+
+    def test_post_analysis_profile(self) -> None:
+        params = GenerationProfiles.get("post_analysis")
+        assert params["max_tokens"] == 1500
+
+    def test_profile_count(self) -> None:
+        """Should have at least 14 profiles."""
+        assert len(GenerationProfiles._PROFILES) >= 14
 
     def test_extract_profile(self) -> None:
         """Extract profile: mid-range tokens."""

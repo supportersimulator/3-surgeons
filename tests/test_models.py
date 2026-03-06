@@ -147,3 +147,31 @@ class TestProviderEndpointStripping:
 
 # Need pytest import for approx
 import pytest
+
+
+def test_deepseek_pricing():
+    from three_surgeons.core.models import estimate_cost
+    cost = estimate_cost("deepseek-chat", 1_000_000, 1_000_000)
+    assert cost > 0
+    assert abs(cost - 1.37) < 0.01  # 0.27 + 1.10
+
+
+def test_groq_pricing():
+    from three_surgeons.core.models import estimate_cost
+    cost = estimate_cost("llama-3.3-70b-versatile", 1_000_000, 1_000_000)
+    assert cost > 0
+    assert abs(cost - 1.38) < 0.01  # 0.59 + 0.79
+
+
+def test_grok_pricing():
+    from three_surgeons.core.models import estimate_cost
+    cost = estimate_cost("grok-2", 1_000_000, 1_000_000)
+    assert cost > 0
+    assert abs(cost - 12.00) < 0.01  # 2.00 + 10.00
+
+
+def test_mistral_pricing():
+    from three_surgeons.core.models import estimate_cost
+    cost = estimate_cost("mistral-large-latest", 1_000_000, 1_000_000)
+    assert cost > 0
+    assert abs(cost - 8.00) < 0.01  # 2.00 + 6.00

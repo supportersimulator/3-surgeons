@@ -1,0 +1,20 @@
+{
+  "name": "3-surgeons-marketplace",
+  "description": "Marketplace for the 3-Surgeons multi-model consensus plugin",
+  "owner": {
+    "name": "Aaron Tjomsland",
+    "email": "aaron@ersimulator.com"
+  },
+  "plugins": [
+    {
+      "name": "3-surgeons",
+      "description": "Multi-model consensus system — 3 LLMs cross-examine each other to catch blind spots on critical decisions",
+      "version": "1.0.0",
+      "source": "./",
+      "author": {
+        "name": "Aaron Tjomsland",
+        "email": "aaron@ersimulator.com"
+      }
+    }
+  ]
+}
