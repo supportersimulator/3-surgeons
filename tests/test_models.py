@@ -175,3 +175,42 @@ def test_mistral_pricing():
     cost = estimate_cost("mistral-large-latest", 1_000_000, 1_000_000)
     assert cost > 0
     assert abs(cost - 8.00) < 0.01  # 2.00 + 6.00
+
+
+# ── Think-tag stripping ─────────────────────────────────────────────
+
+
+from three_surgeons.core.models import strip_think_tags
+
+
+class TestStripThinkTags:
+    """strip_think_tags removes Qwen3-style reasoning blocks."""
+
+    def test_closed_think_tags(self) -> None:
+        raw = '<think>\nLet me reason about this...\n</think>\n{"verdict": "ok"}'
+        assert strip_think_tags(raw) == '{"verdict": "ok"}'
+
+    def test_unclosed_think_tag(self) -> None:
+        raw = "<think>\nI'm still thinking and the budget ran out..."
+        assert strip_think_tags(raw) == ""
+
+    def test_no_think_tags(self) -> None:
+        raw = '{"verdict": "ok", "confidence": 0.9}'
+        assert strip_think_tags(raw) == raw
+
+    def test_empty_think_tags(self) -> None:
+        raw = "<think></think>\nclean output"
+        assert strip_think_tags(raw) == "clean output"
+
+    def test_think_with_multiline_json(self) -> None:
+        raw = (
+            "<think>\nAnalyzing the evidence...\nChecking grades...\n</think>\n"
+            '[\n  {"claim": "test", "challenge": "why?", "severity": "critical"}\n]'
+        )
+        result = strip_think_tags(raw)
+        assert result.startswith("[")
+        assert '"claim": "test"' in result
+
+    def test_preserves_content_before_think(self) -> None:
+        raw = "prefix <think>reasoning</think> suffix"
+        assert strip_think_tags(raw) == "prefix suffix"

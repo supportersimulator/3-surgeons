@@ -6,6 +6,7 @@ querying, cost estimation, and error handling.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
@@ -15,6 +16,25 @@ import httpx
 from three_surgeons.core.config import SurgeonConfig
 
 # Pricing per 1M tokens: (input_usd, output_usd)
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+_THINK_UNCLOSED_RE = re.compile(r"<think>.*", re.DOTALL)
+
+
+def strip_think_tags(text: str) -> str:
+    """Remove Qwen3-style <think>...</think> reasoning blocks from LLM output.
+
+    Handles both closed tags and unclosed tags (when token budget runs out
+    before the model can emit </think>).
+    """
+    if "<think>" not in text:
+        return text
+    # Closed tags first
+    result = _THINK_RE.sub("", text)
+    # Unclosed tag (budget exhausted mid-thought)
+    result = _THINK_UNCLOSED_RE.sub("", result)
+    return result.strip()
+
+
 PRICING: Dict[str, Tuple[float, float]] = {
     # OpenAI
     "gpt-4.1": (2.00, 8.00),
@@ -92,6 +112,9 @@ class LLMProvider:
         POSTs to {endpoint}/chat/completions with the OpenAI-compatible
         messages format. Handles connection errors, HTTP errors, and
         unexpected exceptions gracefully.
+
+        For local models, <think> reasoning blocks are stripped from the
+        response so callers always get clean content.
         """
         url = f"{self.endpoint}/chat/completions"
         headers: Dict[str, str] = {"Content-Type": "application/json"}
@@ -117,6 +140,9 @@ class LLMProvider:
 
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
+            # Strip <think> reasoning blocks from local models (Qwen3, etc.)
+            if self._is_local:
+                content = strip_think_tags(content)
 
             # Extract token usage if available
             usage = data.get("usage", {})
