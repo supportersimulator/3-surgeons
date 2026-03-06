@@ -137,6 +137,8 @@ def _cross_examine(topic: str, depth: str = "full") -> dict:
         "topic": result.topic,
         "cardiologist_report": result.cardiologist_report,
         "neurologist_report": result.neurologist_report,
+        "cardiologist_exploration": result.cardiologist_exploration,
+        "neurologist_exploration": result.neurologist_exploration,
         "synthesis": result.synthesis,
         "total_cost": result.total_cost,
         "total_latency_ms": result.total_latency_ms,

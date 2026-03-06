@@ -78,10 +78,18 @@ class EvidenceStore:
                 "  topic TEXT NOT NULL,"
                 "  neurologist_report TEXT NOT NULL,"
                 "  cardiologist_report TEXT NOT NULL,"
+                "  neurologist_exploration TEXT,"
+                "  cardiologist_exploration TEXT,"
                 "  consensus_score REAL NOT NULL,"
                 "  created_at TEXT NOT NULL"
                 ")"
             )
+            # Migration: add exploration columns to existing DBs
+            for col in ("neurologist_exploration", "cardiologist_exploration"):
+                try:
+                    conn.execute(f"ALTER TABLE cross_exams ADD COLUMN {col} TEXT")
+                except Exception:
+                    pass  # Column already exists
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS cost_tracking ("
                 "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -182,15 +190,21 @@ class EvidenceStore:
         neurologist_report: str,
         cardiologist_report: str,
         consensus_score: float,
+        neurologist_exploration: str = "",
+        cardiologist_exploration: str = "",
     ) -> None:
         """Record a cross-examination between surgeons."""
         now = datetime.utcnow().isoformat()
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO cross_exams "
-                "(topic, neurologist_report, cardiologist_report, consensus_score, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (topic, neurologist_report, cardiologist_report, consensus_score, now),
+                "(topic, neurologist_report, cardiologist_report, "
+                "neurologist_exploration, cardiologist_exploration, "
+                "consensus_score, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (topic, neurologist_report, cardiologist_report,
+                 neurologist_exploration, cardiologist_exploration,
+                 consensus_score, now),
             )
             conn.commit()
 
@@ -199,6 +213,7 @@ class EvidenceStore:
         with self._connect() as conn:
             rows = conn.execute(
                 "SELECT id, topic, neurologist_report, cardiologist_report, "
+                "neurologist_exploration, cardiologist_exploration, "
                 "consensus_score, created_at "
                 "FROM cross_exams ORDER BY id DESC LIMIT ?",
                 (limit,),
@@ -209,6 +224,8 @@ class EvidenceStore:
                 "topic": r["topic"],
                 "neurologist_report": r["neurologist_report"],
                 "cardiologist_report": r["cardiologist_report"],
+                "neurologist_exploration": r["neurologist_exploration"] or "",
+                "cardiologist_exploration": r["cardiologist_exploration"] or "",
                 "consensus_score": r["consensus_score"],
                 "created_at": r["created_at"],
             }

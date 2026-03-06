@@ -523,4 +523,6 @@ class SurgeryTeam:
             neurologist_report=result.neurologist_report or "(unavailable)",
             cardiologist_report=result.cardiologist_report or "(unavailable)",
             consensus_score=0.0,  # No consensus score for consult/cross_examine
+            neurologist_exploration=result.neurologist_exploration or "",
+            cardiologist_exploration=result.cardiologist_exploration or "",
         )

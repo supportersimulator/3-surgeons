@@ -161,6 +161,16 @@ def cross_exam(ctx: click.Context, topic: str) -> None:
         click.echo("--- Neurologist ---")
         click.echo(result.neurologist_report)
         click.echo()
+    if result.cardiologist_exploration or result.neurologist_exploration:
+        click.echo("=== Open Exploration (unknown unknowns) ===")
+        if result.cardiologist_exploration:
+            click.echo("--- Cardiologist Exploration ---")
+            click.echo(result.cardiologist_exploration)
+            click.echo()
+        if result.neurologist_exploration:
+            click.echo("--- Neurologist Exploration ---")
+            click.echo(result.neurologist_exploration)
+            click.echo()
     if result.synthesis:
         click.echo("--- Synthesis ---")
         click.echo(result.synthesis)
