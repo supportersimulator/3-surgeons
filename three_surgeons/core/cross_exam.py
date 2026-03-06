@@ -1,9 +1,10 @@
 """Cross-examination engine for multi-model consensus evaluation.
 
-Orchestrates the Cardiologist (GPT-4.1) and Neurologist (Qwen3-4B) through
-three operations: consult, cross_examine, and consensus.
+Orchestrates the Cardiologist and Neurologist through three operations:
+consult, cross_examine (4-phase with open exploration), and consensus.
 
 Philosophy: "The value is in the disagreements, not the agreements."
+Corrigibility: "What are we ALL blind to?" surfaces unknown unknowns.
 """
 from __future__ import annotations
 
@@ -51,6 +52,8 @@ class CrossExamResult:
     topic: str
     neurologist_report: Optional[str] = None
     cardiologist_report: Optional[str] = None
+    neurologist_exploration: Optional[str] = None
+    cardiologist_exploration: Optional[str] = None
     synthesis: Optional[str] = None
     total_cost: float = 0.0
     total_latency_ms: float = 0.0
@@ -90,6 +93,28 @@ _CROSS_EXAM_REVIEW_PROMPT = (
     "what was missed."
 )
 
+_EXPLORATION_SYSTEM = (
+    "You are a surgeon who has reviewed two colleagues' "
+    "initial analyses and cross-examinations (provided below). Your role now "
+    "is OPEN EXPLORATION -- go beyond what was already covered.\n\n"
+    "Focus on:\n"
+    "- What are we ALL blind to? What assumptions remain unchallenged?\n"
+    "- What adjacent systems, failure modes, or interactions were not considered?\n"
+    "- What would a domain expert immediately ask that we haven't?\n"
+    "- Are there academic, industry, or historical precedents we're ignoring?\n"
+    "- What are the worst-case scenarios nobody mentioned?\n\n"
+    "Do NOT repeat prior analysis. Surface only NEW insights."
+)
+
+_EXPLORATION_PROMPT = (
+    "TOPIC: {topic}\n\n"
+    "=== TEAM ANALYSIS SO FAR ===\n"
+    "--- Cardiologist ---\n{cardio_report}\n\n"
+    "--- Neurologist ---\n{neuro_report}\n\n"
+    "Now: What are we blind to? What haven't we considered? "
+    "Surface unknown unknowns -- the things we don't know we don't know."
+)
+
 _SYNTHESIS_SYSTEM = (
     "You are synthesizing two independent surgical analyses. "
     "Focus on DISAGREEMENTS -- where the surgeons diverge is the most "
@@ -98,8 +123,9 @@ _SYNTHESIS_SYSTEM = (
 
 _SYNTHESIS_PROMPT = (
     "Topic: {topic}\n\n"
-    "--- Cardiologist (GPT-4.1) ---\n{cardio_report}\n\n"
-    "--- Neurologist (Qwen3-4B) ---\n{neuro_report}\n\n"
+    "--- Cardiologist ---\n{cardio_report}\n\n"
+    "--- Neurologist ---\n{neuro_report}\n\n"
+    "{exploration_section}"
     "Synthesize. Emphasize disagreements."
 )
 
@@ -121,7 +147,8 @@ class SurgeryTeam:
 
     Three operations:
     - consult: quick parallel query, raw analyses
-    - cross_examine: deep evaluation with cross-review and synthesis
+    - cross_examine: deep 4-phase evaluation with cross-review, open
+      exploration (corrigibility), and synthesis
     - consensus: confidence-weighted vote on a specific claim
     """
 
@@ -185,7 +212,8 @@ class SurgeryTeam:
 
         Phase 1: Both surgeons analyze independently.
         Phase 2: Each surgeon reviews the other's analysis.
-        Phase 3: Synthesize findings, highlight disagreements.
+        Phase 3: Open exploration -- surface unknown unknowns (corrigibility).
+        Phase 4: Synthesize all findings, highlight disagreements.
 
         Handles model failures gracefully -- one surgeon failing does not
         crash the entire operation.
@@ -262,9 +290,67 @@ class SurgeryTeam:
             neuro_text, neuro_review
         )
 
-        # ── Phase 3: Synthesis ───────────────────────────────────────
+        # ── Phase 3: Open Exploration (corrigibility) ───────────────
+        # Each surgeon receives ALL prior analysis and surfaces unknown
+        # unknowns. The value is in what nobody thought to examine.
+        if result.cardiologist_report and result.neurologist_report:
+            explore_prompt = _EXPLORATION_PROMPT.format(
+                topic=topic,
+                cardio_report=result.cardiologist_report,
+                neuro_report=result.neurologist_report,
+            )
+
+            # Cardiologist explores
+            cardio_explore = self._safe_query(
+                self._cardiologist,
+                system=_EXPLORATION_SYSTEM,
+                prompt=explore_prompt,
+            )
+            if cardio_explore:
+                result.cardiologist_exploration = cardio_explore.content
+                result.total_cost += cardio_explore.cost_usd
+                result.total_latency_ms += cardio_explore.latency_ms
+                self._track_cost(
+                    "cardiologist", cardio_explore.cost_usd, "cross_examine_p3"
+                )
+
+            # Neurologist explores
+            neuro_explore = self._safe_query(
+                self._neurologist,
+                system=_EXPLORATION_SYSTEM,
+                prompt=explore_prompt,
+            )
+            if neuro_explore:
+                result.neurologist_exploration = neuro_explore.content
+                result.total_cost += neuro_explore.cost_usd
+                result.total_latency_ms += neuro_explore.latency_ms
+                self._track_cost(
+                    "neurologist", neuro_explore.cost_usd, "cross_examine_p3"
+                )
+
+        # ── Phase 4: Synthesis ───────────────────────────────────────
         # Use cardiologist for synthesis (external model, broader perspective)
         if result.cardiologist_report and result.neurologist_report:
+            # Include exploration findings in synthesis when available
+            exploration_parts = []
+            if result.cardiologist_exploration:
+                exploration_parts.append(
+                    f"--- Cardiologist Exploration ---\n"
+                    f"{result.cardiologist_exploration}"
+                )
+            if result.neurologist_exploration:
+                exploration_parts.append(
+                    f"--- Neurologist Exploration ---\n"
+                    f"{result.neurologist_exploration}"
+                )
+            exploration_section = (
+                "=== OPEN EXPLORATION (unknown unknowns) ===\n"
+                + "\n\n".join(exploration_parts)
+                + "\n\n"
+                if exploration_parts
+                else ""
+            )
+
             synth_resp = self._safe_query(
                 self._cardiologist,
                 system=_SYNTHESIS_SYSTEM,
@@ -272,6 +358,7 @@ class SurgeryTeam:
                     topic=topic,
                     cardio_report=result.cardiologist_report,
                     neuro_report=result.neurologist_report,
+                    exploration_section=exploration_section,
                 ),
             )
             if synth_resp:

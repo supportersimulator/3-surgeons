@@ -86,6 +86,12 @@ class TestCrossExam:
         # Full cross-exam should attempt synthesis of disagreements
         assert result.synthesis is not None or result.topic == "Should we use SQLite or Postgres?"
 
+    def test_cross_exam_includes_exploration(self, mock_team):
+        result = mock_team.cross_examine("Should we use SQLite or Postgres?")
+        # Phase 3: Open exploration surfaces unknown unknowns
+        assert result.cardiologist_exploration is not None
+        assert result.neurologist_exploration is not None
+
 
 class TestConsult:
     """Consult: quick parallel query to both surgeons, raw analyses."""
