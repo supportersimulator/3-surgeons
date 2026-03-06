@@ -214,3 +214,113 @@ class TestStripThinkTags:
     def test_preserves_content_before_think(self) -> None:
         raw = "prefix <think>reasoning</think> suffix"
         assert strip_think_tags(raw) == "prefix suffix"
+
+
+# ── QueryAdapter protocol ───────────────────────────────────────────
+
+
+class TestQueryAdapter:
+    """QueryAdapter enables routing LLM calls through custom backends."""
+
+    def _make_provider(self, *, adapter=None, is_local: bool = False) -> LLMProvider:
+        provider_name = "mlx" if is_local else "openai"
+        config = SurgeonConfig(
+            provider=provider_name,
+            endpoint="http://127.0.0.1:9999/v1",
+            model="test-model",
+            api_key_env="",
+            role="test",
+        )
+        return LLMProvider(config, query_adapter=adapter)
+
+    def test_no_adapter_uses_http(self) -> None:
+        """Without adapter, provider uses default HTTP path."""
+        provider = self._make_provider()
+        assert provider._adapter is None
+
+    def test_adapter_receives_all_params(self) -> None:
+        """Adapter callable receives system, prompt, max_tokens, temperature, timeout_s."""
+        captured = {}
+
+        def fake_adapter(system, prompt, max_tokens, temperature, timeout_s):
+            captured.update(locals())
+            return LLMResponse(ok=True, content="from adapter", model="adapted")
+
+        provider = self._make_provider(adapter=fake_adapter)
+        resp = provider.query(system="sys", prompt="usr", max_tokens=512, temperature=0.3, timeout_s=10.0)
+        assert resp.ok is True
+        assert resp.content == "from adapter"
+        assert captured["system"] == "sys"
+        assert captured["prompt"] == "usr"
+        assert captured["max_tokens"] == 512
+        assert captured["temperature"] == 0.3
+        assert captured["timeout_s"] == 10.0
+
+    def test_adapter_bypasses_http(self) -> None:
+        """When adapter is set, no HTTP call is made (even to invalid endpoint)."""
+        def fake_adapter(system, prompt, max_tokens, temperature, timeout_s):
+            return LLMResponse(ok=True, content="routed", model="queue")
+
+        # Endpoint is unreachable — but adapter prevents HTTP call
+        provider = self._make_provider(adapter=fake_adapter)
+        resp = provider.query(system="s", prompt="p")
+        assert resp.ok is True
+        assert resp.content == "routed"
+
+    def test_adapter_think_tags_still_stripped_for_local(self) -> None:
+        """Think-tag stripping applies to adapter responses for local models."""
+        def think_adapter(system, prompt, max_tokens, temperature, timeout_s):
+            return LLMResponse(
+                ok=True,
+                content='<think>\nreasoning\n</think>\n{"result": "clean"}',
+                model="local-qwen",
+            )
+
+        provider = self._make_provider(adapter=think_adapter, is_local=True)
+        resp = provider.query(system="s", prompt="p")
+        assert resp.ok is True
+        assert "<think>" not in resp.content
+        assert '{"result": "clean"}' == resp.content
+
+    def test_adapter_no_strip_for_remote(self) -> None:
+        """Think-tag stripping does NOT apply for remote providers (even if content has tags)."""
+        def remote_adapter(system, prompt, max_tokens, temperature, timeout_s):
+            return LLMResponse(
+                ok=True,
+                content="<think>some reasoning</think>\nresult",
+                model="gpt-4.1",
+            )
+
+        provider = self._make_provider(adapter=remote_adapter, is_local=False)
+        resp = provider.query(system="s", prompt="p")
+        assert "<think>" in resp.content  # Not stripped for remote
+
+    def test_adapter_error_propagated(self) -> None:
+        """Adapter returning ok=False propagates cleanly."""
+        def failing_adapter(system, prompt, max_tokens, temperature, timeout_s):
+            return LLMResponse.error("queue full", model="local")
+
+        provider = self._make_provider(adapter=failing_adapter)
+        resp = provider.query(system="s", prompt="p")
+        assert resp.ok is False
+        assert "queue full" in resp.content
+
+    def test_adapter_exception_caught(self) -> None:
+        """If adapter raises, LLMProvider catches and returns error response."""
+        def broken_adapter(system, prompt, max_tokens, temperature, timeout_s):
+            raise RuntimeError("adapter crashed")
+
+        provider = self._make_provider(adapter=broken_adapter)
+        resp = provider.query(system="s", prompt="p")
+        assert resp.ok is False
+        assert "adapter crashed" in resp.content
+
+    def test_ping_routes_through_adapter(self) -> None:
+        """ping() also routes through adapter when present."""
+        def ping_adapter(system, prompt, max_tokens, temperature, timeout_s):
+            return LLMResponse(ok=True, content="operational", model="adapted")
+
+        provider = self._make_provider(adapter=ping_adapter)
+        resp = provider.ping()
+        assert resp.ok is True
+        assert resp.content == "operational"

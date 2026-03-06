@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Tuple
+from typing import Callable, Dict, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
 
@@ -86,18 +86,46 @@ class LLMResponse:
         return cls(ok=False, content=message, model=model)
 
 
+@runtime_checkable
+class QueryAdapter(Protocol):
+    """Protocol for routing LLM calls through custom backends.
+
+    Open-source default: None (raw HTTP via OpenAI-compatible endpoint).
+    ContextDNA IDE: injects priority_queue adapter for GPU scheduling.
+    Any callable matching this signature works as an adapter.
+    """
+
+    def __call__(
+        self,
+        system: str,
+        prompt: str,
+        max_tokens: int,
+        temperature: float,
+        timeout_s: float,
+    ) -> "LLMResponse": ...
+
+
 class LLMProvider:
     """Unified LLM provider using the OpenAI-compatible chat completions API.
 
     Works with OpenAI, Ollama, local MLX servers, or any endpoint that
     implements the /v1/chat/completions interface.
+
+    Optional query_adapter: when provided, all LLM calls route through the
+    adapter instead of raw HTTP. This enables priority queue scheduling,
+    rate limiting, or any custom routing without changing callers.
     """
 
-    def __init__(self, config: SurgeonConfig) -> None:
+    def __init__(
+        self,
+        config: SurgeonConfig,
+        query_adapter: Optional[Callable[..., "LLMResponse"]] = None,
+    ) -> None:
         self.endpoint: str = config.endpoint.rstrip("/")
         self.model: str = config.model
         self._api_key: Optional[str] = config.get_api_key()
         self._is_local: bool = config.provider in ("ollama", "mlx", "local")
+        self._adapter = query_adapter
 
     def query(
         self,
@@ -116,6 +144,9 @@ class LLMProvider:
         For local models, <think> reasoning blocks are stripped from the
         response so callers always get clean content.
         """
+        if self._adapter is not None:
+            return self._query_via_adapter(system, prompt, max_tokens, temperature, timeout_s)
+
         url = f"{self.endpoint}/chat/completions"
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if self._api_key:
@@ -183,6 +214,38 @@ class LLMProvider:
             return LLMResponse(
                 ok=False,
                 content=f"Unexpected error: {exc}",
+                latency_ms=latency_ms,
+                model=self.model,
+            )
+
+    def _query_via_adapter(
+        self,
+        system: str,
+        prompt: str,
+        max_tokens: int,
+        temperature: float,
+        timeout_s: float,
+    ) -> LLMResponse:
+        """Route query through the injected adapter."""
+        t0 = time.monotonic()
+        try:
+            resp = self._adapter(system, prompt, max_tokens, temperature, timeout_s)
+            if self._is_local and resp.ok:
+                resp = LLMResponse(
+                    ok=resp.ok,
+                    content=strip_think_tags(resp.content),
+                    latency_ms=resp.latency_ms or int((time.monotonic() - t0) * 1000),
+                    model=resp.model or self.model,
+                    cost_usd=resp.cost_usd,
+                    tokens_in=resp.tokens_in,
+                    tokens_out=resp.tokens_out,
+                )
+            return resp
+        except Exception as exc:
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            return LLMResponse(
+                ok=False,
+                content=f"Adapter error: {exc}",
                 latency_ms=latency_ms,
                 model=self.model,
             )
