@@ -260,3 +260,30 @@ def test_config_from_yaml_with_state(tmp_path):
     cfg = Config.from_yaml(yaml_file)
     assert cfg.state.backend == "redis"
     assert cfg.state.redis_url == "redis://myhost:6380/1"
+
+
+def test_preset_api_only_loads():
+    from three_surgeons.core.config import Config
+    preset = Path(__file__).parent.parent / "config" / "presets" / "api-only.yaml"
+    assert preset.exists(), "api-only.yaml preset missing"
+    cfg = Config.from_yaml(preset)
+    assert cfg.cardiologist.provider == "openai"
+    assert cfg.neurologist.api_key_env == "DEEPSEEK_API_KEY"
+
+
+def test_preset_local_only_loads():
+    from three_surgeons.core.config import Config
+    preset = Path(__file__).parent.parent / "config" / "presets" / "local-only.yaml"
+    assert preset.exists(), "local-only.yaml preset missing"
+    cfg = Config.from_yaml(preset)
+    assert cfg.cardiologist.provider == "ollama"
+    assert cfg.neurologist.provider == "ollama"
+
+
+def test_preset_hybrid_loads():
+    from three_surgeons.core.config import Config
+    preset = Path(__file__).parent.parent / "config" / "presets" / "hybrid.yaml"
+    assert preset.exists(), "hybrid.yaml preset missing"
+    cfg = Config.from_yaml(preset)
+    assert cfg.cardiologist.provider == "openai"
+    assert cfg.neurologist.provider == "ollama"
