@@ -541,3 +541,36 @@ class TestPluginStructure:
         assert "escape_for_json" in content, "Missing JSON escape function"
         assert "hookSpecificOutput" in content, "Missing hookSpecificOutput format"
         assert "additional_context" in content, "Missing additional_context format"
+
+    @property
+    def plugin_root(self):
+        return Path(__file__).parent.parent
+
+    def test_cursor_plugin_json_exists(self):
+        cursor = self.plugin_root / ".cursor-plugin" / "plugin.json"
+        assert cursor.exists(), ".cursor-plugin/plugin.json missing"
+
+    def test_cursor_plugin_json_valid(self):
+        import json
+        cursor = self.plugin_root / ".cursor-plugin" / "plugin.json"
+        data = json.loads(cursor.read_text())
+        assert data["name"] == "3-surgeons"
+        assert "skills" in data
+
+    def test_license_exists(self):
+        assert (self.plugin_root / "LICENSE").exists(), "LICENSE file missing"
+
+    def test_gitattributes_exists(self):
+        assert (self.plugin_root / ".gitattributes").exists(), ".gitattributes file missing"
+
+    def test_env_example_exists(self):
+        assert (self.plugin_root / ".env.example").exists(), ".env.example file missing"
+
+    def test_env_example_no_real_keys(self):
+        content = (self.plugin_root / ".env.example").read_text()
+        # Should only have empty values (key=) not actual keys
+        for line in content.splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                key, value = line.split("=", 1)
+                assert value.strip() == "", f"Non-empty value in .env.example for {key}"

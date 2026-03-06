@@ -1,0 +1,10 @@
+# Enforce LF line endings for shell scripts (critical for Windows)
+*.sh text eol=lf
+hooks/session-start text eol=lf
+hooks/run-hook.cmd text eol=lf
+bin/* text eol=lf
+
+# Binary files
+*.db binary
+*.png binary
+*.jpg binary
