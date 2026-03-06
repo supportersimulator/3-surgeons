@@ -38,13 +38,26 @@ class TestCLIHelp:
 class TestInitCommand:
     """Test the interactive init wizard."""
 
+    def test_init_preset_selection(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Init wizard should offer preset selection."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        runner = CliRunner()
+        # Select preset 1 (hybrid)
+        result = runner.invoke(cli, ["init"], input="1\n")
+        assert "Choose a preset" in result.output
+        assert "Security reminder" in result.output
+        # Config file should be created
+        config_path = tmp_path / ".3surgeons" / "config.yaml"
+        assert config_path.exists()
+
     def test_init_creates_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOME", str(tmp_path))
         runner = CliRunner()
+        # Select preset 4 (custom), then provide manual config values
         result = runner.invoke(
             cli,
             ["init"],
-            input="openai\ngpt-4.1-mini\nOPENAI_API_KEY\nollama\nqwen3:4b\nhttp://localhost:11434/v1\n",
+            input="4\nopenai\ngpt-4.1-mini\nhttps://api.openai.com/v1\nOPENAI_API_KEY\nollama\nqwen3:4b\nhttp://localhost:11434/v1\n\n",
         )
         assert result.exit_code == 0
         assert (tmp_path / ".3surgeons" / "config.yaml").exists()
@@ -52,10 +65,11 @@ class TestInitCommand:
     def test_init_writes_valid_yaml(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("HOME", str(tmp_path))
         runner = CliRunner()
+        # Select preset 4 (custom), then provide manual config values
         runner.invoke(
             cli,
             ["init"],
-            input="openai\ngpt-4.1-mini\nOPENAI_API_KEY\nollama\nqwen3:4b\nhttp://localhost:11434/v1\n",
+            input="4\nopenai\ngpt-4.1-mini\nhttps://api.openai.com/v1\nOPENAI_API_KEY\nollama\nqwen3:4b\nhttp://localhost:11434/v1\n\n",
         )
         config_path = tmp_path / ".3surgeons" / "config.yaml"
         data = yaml.safe_load(config_path.read_text())

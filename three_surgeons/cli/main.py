@@ -30,46 +30,68 @@ def cli(ctx: click.Context) -> None:
 @cli.command()
 def init() -> None:
     """Interactive setup wizard."""
+    import shutil
+
     click.echo("3-Surgeons Setup Wizard")
     click.echo("=" * 40)
 
-    # Cardiologist config
-    click.echo("\n--- Cardiologist (external model) ---")
-    cardio_provider = click.prompt("Provider", default="openai")
-    cardio_model = click.prompt("Model", default="gpt-4.1-mini")
-    cardio_api_key_env = click.prompt("API key env var", default="OPENAI_API_KEY")
+    # Preset selection
+    click.echo("\nChoose a preset:")
+    click.echo("  1. Hybrid (Recommended) -- OpenAI + local Ollama")
+    click.echo("  2. API-Only -- OpenAI + DeepSeek (no local LLM)")
+    click.echo("  3. Local-Only -- Ollama only ($0 cost)")
+    click.echo("  4. Custom -- configure manually")
+    preset = click.prompt("Selection", type=int, default=1)
 
-    # Neurologist config
-    click.echo("\n--- Neurologist (local model) ---")
-    neuro_provider = click.prompt("Provider", default="ollama")
-    neuro_model = click.prompt("Model", default="qwen3:4b")
-    neuro_endpoint = click.prompt("Endpoint", default="http://localhost:11434/v1")
-
-    config_data = {
-        "surgeons": {
-            "cardiologist": {
-                "provider": cardio_provider,
-                "model": cardio_model,
-                "api_key_env": cardio_api_key_env,
-                "endpoint": "https://api.openai.com/v1",
-                "role": "External perspective -- cross-examination, evidence",
-            },
-            "neurologist": {
-                "provider": neuro_provider,
-                "model": neuro_model,
-                "endpoint": neuro_endpoint,
-                "api_key_env": "",
-                "role": "Local intelligence -- pattern recognition, corrigibility",
-            },
-        },
-    }
+    presets_dir = Path(__file__).parent.parent.parent / "config" / "presets"
+    preset_map = {1: "hybrid.yaml", 2: "api-only.yaml", 3: "local-only.yaml"}
 
     config_dir = Path.home() / ".3surgeons"
     config_dir.mkdir(parents=True, exist_ok=True)
     config_path = config_dir / "config.yaml"
-    config_path.write_text(yaml.dump(config_data, default_flow_style=False))
 
-    click.echo(f"\nConfig written to {config_path}")
+    if preset in preset_map and (presets_dir / preset_map[preset]).exists():
+        shutil.copy(presets_dir / preset_map[preset], config_path)
+        click.echo(f"\nPreset '{preset_map[preset]}' written to {config_path}")
+    else:
+        # Manual config (custom wizard)
+        click.echo("\n--- Cardiologist (external model) ---")
+        cardio_provider = click.prompt("Provider", default="openai")
+        cardio_model = click.prompt("Model", default="gpt-4.1-mini")
+        cardio_endpoint = click.prompt("Endpoint", default="https://api.openai.com/v1")
+        cardio_api_key_env = click.prompt("API key env var", default="OPENAI_API_KEY")
+
+        click.echo("\n--- Neurologist ---")
+        neuro_provider = click.prompt("Provider", default="ollama")
+        neuro_model = click.prompt("Model", default="qwen3:4b")
+        neuro_endpoint = click.prompt("Endpoint", default="http://localhost:11434/v1")
+        neuro_api_key_env = click.prompt("API key env var (blank if local)", default="")
+
+        config_data = {
+            "surgeons": {
+                "cardiologist": {
+                    "provider": cardio_provider,
+                    "model": cardio_model,
+                    "endpoint": cardio_endpoint,
+                    "api_key_env": cardio_api_key_env,
+                    "role": "External perspective -- cross-examination, evidence",
+                },
+                "neurologist": {
+                    "provider": neuro_provider,
+                    "model": neuro_model,
+                    "endpoint": neuro_endpoint,
+                    "api_key_env": neuro_api_key_env,
+                    "role": "Local intelligence -- pattern recognition, corrigibility",
+                },
+            },
+            "state": {"backend": "sqlite", "sqlite_path": "~/.3surgeons/state.db"},
+            "budgets": {"daily_external_usd": 5.0},
+            "evidence": {"db_path": "~/.3surgeons/evidence.db"},
+        }
+        config_path.write_text(yaml.dump(config_data, default_flow_style=False))
+        click.echo(f"\nConfig written to {config_path}")
+
+    click.echo("\nSecurity reminder: NEVER commit API keys. Use environment variables.")
     click.echo("Run '3s probe' to verify connectivity.")
 
 
