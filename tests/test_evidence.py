@@ -176,3 +176,125 @@ class TestSearchEdgeCases:
             store.record_learning(f"Item {i}", f"Shared keyword content", "fix", [])
         results = store.search("keyword", limit=3)
         assert len(results) == 3
+
+
+# ── Evidence Grading Ladder ──────────────────────────────────────────
+
+
+from three_surgeons.core.evidence import EvidenceGrade
+
+
+class TestEvidenceGrade:
+    """EvidenceGrade enum: EBM-inspired grading with weights."""
+
+    def test_grade_hierarchy_order(self) -> None:
+        assert EvidenceGrade.ANECDOTAL.weight < EvidenceGrade.CASE_SERIES.weight
+        assert EvidenceGrade.CASE_SERIES.weight < EvidenceGrade.COHORT.weight
+        assert EvidenceGrade.COHORT.weight < EvidenceGrade.VALIDATED.weight
+
+    def test_from_string_known_grades(self) -> None:
+        assert EvidenceGrade.from_string("anecdotal") == EvidenceGrade.ANECDOTAL
+        assert EvidenceGrade.from_string("cohort") == EvidenceGrade.COHORT
+        assert EvidenceGrade.from_string("validated") == EvidenceGrade.VALIDATED
+
+    def test_from_string_backward_compat(self) -> None:
+        # Internal system used "correlation" → maps to CASE_SERIES
+        assert EvidenceGrade.from_string("correlation") == EvidenceGrade.CASE_SERIES
+        # "anecdote" (no 'l') → ANECDOTAL
+        assert EvidenceGrade.from_string("anecdote") == EvidenceGrade.ANECDOTAL
+        # "opinion" → EXPERT_OPINION
+        assert EvidenceGrade.from_string("opinion") == EvidenceGrade.EXPERT_OPINION
+
+    def test_from_string_unknown_defaults_anecdotal(self) -> None:
+        assert EvidenceGrade.from_string("made_up_grade") == EvidenceGrade.ANECDOTAL
+
+    def test_apply_to_confidence(self) -> None:
+        # High confidence + weak evidence = discounted
+        grade = EvidenceGrade.ANECDOTAL
+        weighted = grade.apply_to_confidence(0.9)
+        assert weighted < 0.9
+        assert weighted == pytest.approx(0.9 * grade.weight)
+
+    def test_apply_to_confidence_validated(self) -> None:
+        # Validated evidence preserves most of the confidence
+        grade = EvidenceGrade.VALIDATED
+        weighted = grade.apply_to_confidence(0.9)
+        assert weighted > 0.7
+
+    def test_grade_rank_ordering(self) -> None:
+        assert EvidenceGrade.ANECDOTAL.rank < EvidenceGrade.EXPERT_OPINION.rank
+        assert EvidenceGrade.EXPERT_OPINION.rank < EvidenceGrade.CASE_SERIES.rank
+        assert EvidenceGrade.CASE_SERIES.rank < EvidenceGrade.COHORT.rank
+        assert EvidenceGrade.COHORT.rank < EvidenceGrade.VALIDATED.rank
+
+
+class TestEvidenceGradeUpgrade:
+    """UP-ONLY evidence grade ladder on observations."""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> EvidenceStore:
+        return EvidenceStore(str(tmp_path / "evidence.db"))
+
+    def test_record_observation_stores_weighted_confidence(self, store: EvidenceStore) -> None:
+        obs_id = store.record_observation(
+            statement="WAL checkpoints prevent bloat",
+            confidence=0.8,
+            evidence_grade="anecdotal",
+        )
+        assert obs_id is not None
+
+    def test_record_outcome_and_count(self, store: EvidenceStore) -> None:
+        obs_id = store.record_observation("Test claim", 0.7, "anecdotal")
+        store.record_outcome(obs_id, success=True)
+        store.record_outcome(obs_id, success=True)
+        store.record_outcome(obs_id, success=False)
+        stats = store.get_observation_outcome_stats(obs_id)
+        assert stats["n"] == 3
+        assert stats["success_rate"] == pytest.approx(2.0 / 3.0)
+
+    def test_auto_upgrade_anecdotal_to_case_series(self, store: EvidenceStore) -> None:
+        obs_id = store.record_observation("Repeatable fix", 0.7, "anecdotal")
+        # Need 3 outcomes at 50%+ for correlation, 5 at 60%+ for case_series
+        for _ in range(5):
+            store.record_outcome(obs_id, success=True)
+        result = store.auto_upgrade_grade(obs_id)
+        assert result is not None
+        assert result["old_grade"] == "anecdotal"
+        # 5 outcomes at 100% success → case_series (5@60%)
+        assert result["new_grade"] == "case_series"
+
+    def test_auto_upgrade_never_downgrades(self, store: EvidenceStore) -> None:
+        obs_id = store.record_observation("Strong claim", 0.9, "cohort")
+        # Record only 1 outcome (would be anecdotal level)
+        store.record_outcome(obs_id, success=True)
+        result = store.auto_upgrade_grade(obs_id)
+        # Should NOT downgrade from cohort to anecdotal
+        assert result is None
+
+    def test_auto_upgrade_to_validated(self, store: EvidenceStore) -> None:
+        obs_id = store.record_observation("Well-tested claim", 0.8, "anecdotal")
+        for _ in range(20):
+            store.record_outcome(obs_id, success=True)
+        result = store.auto_upgrade_grade(obs_id)
+        assert result is not None
+        assert result["new_grade"] == "validated"
+
+    def test_grade_history_logged(self, store: EvidenceStore) -> None:
+        obs_id = store.record_observation("Track history", 0.7, "anecdotal")
+        for _ in range(5):
+            store.record_outcome(obs_id, success=True)
+        store.auto_upgrade_grade(obs_id)
+        history = store.get_grade_history(obs_id)
+        assert len(history) == 1
+        assert history[0]["old_grade"] == "anecdotal"
+        assert history[0]["new_grade"] == "case_series"
+
+    def test_upgrade_threshold_requires_success_rate(self, store: EvidenceStore) -> None:
+        obs_id = store.record_observation("Flaky claim", 0.5, "anecdotal")
+        # 10 outcomes but only 40% success → stays at anecdotal (needs 50% for correlation)
+        for _ in range(4):
+            store.record_outcome(obs_id, success=True)
+        for _ in range(6):
+            store.record_outcome(obs_id, success=False)
+        result = store.auto_upgrade_grade(obs_id)
+        assert result is None  # 40% < 50% threshold

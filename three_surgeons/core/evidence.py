@@ -2,14 +2,80 @@
 
 FTS5-searchable learnings, claims, cross-exam logs, cost tracking,
 A/B results, and observations. Portable, self-contained evidence system.
+
+Includes EBM-inspired evidence grading ladder with UP-ONLY promotion.
 """
 from __future__ import annotations
 
 import json
 import sqlite3
 from datetime import date, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+# ── Evidence Grade Enum ──────────────────────────────────────────────
+
+
+class EvidenceGrade(Enum):
+    """EBM-inspired evidence grading. Higher weight = stronger evidence.
+
+    Grades form an UP-ONLY ladder: once promoted, never demoted.
+    Thresholds: anecdotal(1) → correlation/case_series(5@60%) →
+    cohort(10@70%) → validated(20@80%).
+    """
+
+    ANECDOTAL = 0.3
+    EXPERT_OPINION = 0.4
+    CASE_SERIES = 0.5
+    COHORT = 0.7
+    VALIDATED = 0.9
+
+    @property
+    def weight(self) -> float:
+        return self.value
+
+    @property
+    def rank(self) -> int:
+        return _GRADE_RANK[self.name.lower()]
+
+    def apply_to_confidence(self, base_confidence: float) -> float:
+        """Discount confidence by evidence strength."""
+        return base_confidence * self.weight
+
+    @classmethod
+    def from_string(cls, grade_str: str) -> EvidenceGrade:
+        """Parse grade string with backward-compat aliases."""
+        mapping = {
+            "anecdotal": cls.ANECDOTAL,
+            "anecdote": cls.ANECDOTAL,
+            "expert_opinion": cls.EXPERT_OPINION,
+            "opinion": cls.EXPERT_OPINION,
+            "case_series": cls.CASE_SERIES,
+            "correlation": cls.CASE_SERIES,
+            "cohort": cls.COHORT,
+            "validated": cls.VALIDATED,
+            "meta_analysis": cls.VALIDATED,
+        }
+        return mapping.get(grade_str.lower().strip(), cls.ANECDOTAL)
+
+
+_GRADE_RANK: Dict[str, int] = {
+    "anecdotal": 0,
+    "expert_opinion": 1,
+    "case_series": 2,
+    "cohort": 3,
+    "validated": 4,
+}
+
+_GRADE_THRESHOLDS = [
+    (20, 0.8, "validated"),
+    (10, 0.7, "cohort"),
+    (5, 0.6, "case_series"),
+    (3, 0.5, "case_series"),
+    (1, 0.0, "anecdotal"),
+]
 
 
 class EvidenceStore:
@@ -115,8 +181,39 @@ class EvidenceStore:
                 "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 "  statement TEXT NOT NULL,"
                 "  confidence REAL NOT NULL,"
+                "  weighted_confidence REAL NOT NULL DEFAULT 0.0,"
                 "  evidence_grade TEXT NOT NULL,"
                 "  created_at TEXT NOT NULL"
+                ")"
+            )
+            # Migration: add weighted_confidence to existing DBs
+            try:
+                conn.execute(
+                    "ALTER TABLE observations ADD COLUMN "
+                    "weighted_confidence REAL NOT NULL DEFAULT 0.0"
+                )
+            except Exception:
+                pass
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS observation_outcomes ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  observation_id INTEGER NOT NULL,"
+                "  success INTEGER NOT NULL,"
+                "  created_at TEXT NOT NULL,"
+                "  FOREIGN KEY (observation_id) REFERENCES observations(id)"
+                ")"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS evidence_grade_history ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  observation_id INTEGER NOT NULL,"
+                "  old_grade TEXT NOT NULL,"
+                "  new_grade TEXT NOT NULL,"
+                "  reason TEXT,"
+                "  outcome_count INTEGER,"
+                "  success_rate REAL,"
+                "  created_at TEXT NOT NULL,"
+                "  FOREIGN KEY (observation_id) REFERENCES observations(id)"
                 ")"
             )
             conn.commit()
@@ -285,17 +382,131 @@ class EvidenceStore:
         statement: str,
         confidence: float,
         evidence_grade: str,
-    ) -> None:
-        """Record an observation with confidence and evidence grade."""
+    ) -> int:
+        """Record an observation with EBM-weighted confidence. Returns row id."""
+        grade = EvidenceGrade.from_string(evidence_grade)
+        weighted = grade.apply_to_confidence(confidence)
+        now = datetime.utcnow().isoformat()
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "INSERT INTO observations "
+                "(statement, confidence, weighted_confidence, evidence_grade, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (statement, confidence, weighted, evidence_grade, now),
+            )
+            conn.commit()
+            return cursor.lastrowid  # type: ignore[return-value]
+
+    def record_outcome(self, observation_id: int, success: bool) -> None:
+        """Record an outcome for an observation (for grade ladder)."""
         now = datetime.utcnow().isoformat()
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO observations "
-                "(statement, confidence, evidence_grade, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (statement, confidence, evidence_grade, now),
+                "INSERT INTO observation_outcomes "
+                "(observation_id, success, created_at) VALUES (?, ?, ?)",
+                (observation_id, 1 if success else 0, now),
             )
             conn.commit()
+
+    def get_observation_outcome_stats(
+        self, observation_id: int
+    ) -> Dict[str, Any]:
+        """Get outcome count and success rate for an observation."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n, "
+                "COALESCE(AVG(success), 0.0) AS success_rate "
+                "FROM observation_outcomes WHERE observation_id = ?",
+                (observation_id,),
+            ).fetchone()
+        return {"n": row["n"], "success_rate": row["success_rate"]}
+
+    def auto_upgrade_grade(
+        self, observation_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Auto-UPGRADE evidence grade based on outcomes. Never downgrades.
+
+        Returns grade transition dict if upgraded, None otherwise.
+        """
+        with self._connect() as conn:
+            obs = conn.execute(
+                "SELECT evidence_grade FROM observations WHERE id = ?",
+                (observation_id,),
+            ).fetchone()
+            if not obs:
+                return None
+            old_grade = obs["evidence_grade"]
+
+            stats = self.get_observation_outcome_stats(observation_id)
+            n, sr = stats["n"], stats["success_rate"]
+
+            earned_grade = "anecdotal"
+            for threshold_n, threshold_sr, grade in _GRADE_THRESHOLDS:
+                if n >= threshold_n and sr >= threshold_sr:
+                    earned_grade = grade
+                    break
+
+            old_rank = _GRADE_RANK.get(
+                EvidenceGrade.from_string(old_grade).name.lower(), 0
+            )
+            new_rank = _GRADE_RANK.get(
+                EvidenceGrade.from_string(earned_grade).name.lower(), 0
+            )
+            if new_rank <= old_rank:
+                return None
+
+            now = datetime.utcnow().isoformat()
+            conn.execute(
+                "UPDATE observations SET evidence_grade = ? WHERE id = ?",
+                (earned_grade, observation_id),
+            )
+            conn.execute(
+                "INSERT INTO evidence_grade_history "
+                "(observation_id, old_grade, new_grade, reason, "
+                "outcome_count, success_rate, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    observation_id,
+                    old_grade,
+                    earned_grade,
+                    f"Auto-upgrade: n={n}, sr={sr:.2f}",
+                    n,
+                    sr,
+                    now,
+                ),
+            )
+            conn.commit()
+        return {
+            "observation_id": observation_id,
+            "old_grade": old_grade,
+            "new_grade": earned_grade,
+            "n": n,
+            "success_rate": sr,
+        }
+
+    def get_grade_history(
+        self, observation_id: int
+    ) -> List[Dict[str, Any]]:
+        """Get grade transition history for an observation."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT old_grade, new_grade, reason, "
+                "outcome_count, success_rate, created_at "
+                "FROM evidence_grade_history "
+                "WHERE observation_id = ? ORDER BY id",
+                (observation_id,),
+            ).fetchall()
+        return [
+            {
+                "old_grade": r["old_grade"],
+                "new_grade": r["new_grade"],
+                "reason": r["reason"],
+                "outcome_count": r["outcome_count"],
+                "success_rate": r["success_rate"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
 
     # ── Stats ──────────────────────────────────────────────────────────
 
