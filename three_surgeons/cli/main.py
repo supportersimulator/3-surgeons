@@ -562,6 +562,113 @@ def ab_propose(
         ctx.exit(1)
 
 
+# -- docs-init ---------------------------------------------------------------
+
+
+@cli.command("docs-init")
+@click.argument("path", default=".", type=click.Path(exists=True))
+@click.option("--scan", is_flag=True, help="Auto-detect projects in repo")
+@click.option("--no-gitignore", is_flag=True, help="Skip .gitignore update")
+def docs_init(path: str, scan: bool, no_gitignore: bool) -> None:
+    """Set up 4-folder document system (inbox/vision/reflect/dao)."""
+    from three_surgeons.core.doc_organizer import init_docs, scan_repo
+
+    target = Path(path).resolve()
+
+    if scan:
+        click.echo(f"Scanning {target} for project structure...\n")
+        scan_result = scan_repo(target)
+
+        if scan_result.is_superrepo:
+            click.echo("Detected: superrepo with submodules\n")
+
+        if scan_result.projects:
+            click.echo("Detected projects:\n")
+            for p in scan_result.projects:
+                marker = "*" if p.recommended else " "
+                click.echo(f"  [{marker}] {p.name}/ -- {p.reason}"
+                           f" (score={p.score})")
+            click.echo()
+
+            recommended = [p for p in scan_result.projects if p.recommended]
+            if recommended:
+                click.echo(f"Recommendation: Create 4-folder system in repo root + "
+                           f"{len(recommended)} project(s):")
+                for p in recommended:
+                    click.echo(f"  - {p.name}/")
+                click.echo()
+
+            if not click.confirm("Set up 4 folders in repo root?", default=True):
+                click.echo("Aborted.")
+                return
+
+            result = init_docs(target, update_gitignore=not no_gitignore)
+            _print_init_result(result, "repo root")
+
+            for p in recommended:
+                if click.confirm(f"Set up 4 folders in {p.name}/?", default=True):
+                    r = init_docs(p.path, update_gitignore=not no_gitignore)
+                    _print_init_result(r, p.name)
+        else:
+            click.echo("No distinct sub-projects detected. Setting up in repo root.\n")
+            result = init_docs(target, update_gitignore=not no_gitignore)
+            _print_init_result(result, "repo root")
+    else:
+        result = init_docs(target, update_gitignore=not no_gitignore)
+        _print_init_result(result, str(target.name))
+
+    click.echo("\nDone. Documents don't move between folders -- each generates independently.")
+    click.echo("Run '3s docs-init --scan' to detect sub-projects in monorepos.")
+
+
+def _print_init_result(result, label: str) -> None:
+    """Print the result of a docs-init operation."""
+    if result.folders_created:
+        click.echo(f"  [{label}] Created: {', '.join(result.folders_created)}")
+    if result.already_existed:
+        click.echo(f"  [{label}] Already existed: {', '.join(result.already_existed)}")
+    if result.gitignore_updated:
+        click.echo(f"  [{label}] Updated .gitignore")
+
+
+# -- docs-scan ---------------------------------------------------------------
+
+
+@cli.command("docs-scan")
+@click.argument("path", default=".", type=click.Path(exists=True))
+def docs_scan(path: str) -> None:
+    """Scan repo for projects that deserve their own 4 folders."""
+    from three_surgeons.core.doc_organizer import scan_repo
+
+    target = Path(path).resolve()
+    click.echo(f"Scanning {target}...\n")
+    scan_result = scan_repo(target)
+
+    if scan_result.is_superrepo:
+        click.echo("Type: superrepo (has .gitmodules)\n")
+
+    if not scan_result.projects:
+        click.echo("No distinct sub-projects detected.")
+        click.echo("This looks like a single project -- run '3s docs-init' to set up folders.")
+        return
+
+    click.echo("Detected projects:\n")
+    for p in scan_result.projects:
+        marker = "recommend" if p.recommended else "skip"
+        sub = " (submodule)" if p.is_submodule else ""
+        click.echo(f"  {p.name}/{sub}")
+        click.echo(f"    {p.reason} | score={p.score} | {marker}")
+        click.echo()
+
+    recommended = [p for p in scan_result.projects if p.recommended]
+    skipped = [p for p in scan_result.projects if not p.recommended]
+    click.echo(f"Recommend 4 folders: repo root + {len(recommended)} project(s)")
+    if skipped:
+        click.echo(f"Skip {len(skipped)}: {', '.join(p.name for p in skipped)} "
+                    f"(shared/utility, fewer independence signals)")
+    click.echo(f"\nRun '3s docs-init --scan' to set up all recommended projects.")
+
+
 # -- main entry point -------------------------------------------------------
 
 

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Gate Reminder Hook — surfaces invariance gate reminders at key moments
+# Called by hooks.json via run-hook.cmd
+#
+# Usage: gate-reminder <trigger>
+#   trigger: write | plan-mode | post-skill
+
+TRIGGER="${1:-unknown}"
+
+case "$TRIGGER" in
+  write)
+    # Reminder when about to write/edit files
+    # Light touch — just a context note, not a blocker
+    echo "3-Surgeons: If this change touches >3 files, architecture, security, schema, or APIs — invoke the architectural-gate skill before proceeding."
+    ;;
+  plan-mode)
+    # Reminder when entering plan mode
+    echo "3-Surgeons: Before implementing this plan, invoke pre-implementation-review to validate it survives adversarial scrutiny."
+    ;;
+  post-skill)
+    # After a skill completes — reminder about post-implementation-verification
+    echo "3-Surgeons: Before claiming work is done, invoke post-implementation-verification."
+    ;;
+  *)
+    # Unknown trigger — no output
+    ;;
+esac

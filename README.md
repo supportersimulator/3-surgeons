@@ -119,7 +119,7 @@ See `config/3surgeons.example.yaml` for the full schema.
 3-Surgeons works standalone. When you're ready for priority queue GPU scheduling, Redis state, and the full butler subconscious, the upgrade is one line:
 
 ```python
-from contextdna.adapters import priority_queue_adapter
+from context_dna.adapters import priority_queue_adapter
 provider = LLMProvider(config, query_adapter=priority_queue_adapter)
 ```
 

@@ -64,33 +64,79 @@ When the MCP server is running (`python -m three_surgeons.mcp.server`), the same
 | `ab_measure` | (lifecycle management) |
 | `ab_conclude` | (lifecycle management) |
 
-## When to Use Each Skill
+## Invariance Gate System
+
+<EXTREMELY-IMPORTANT>
+If you think there is even a 1% chance an invariance gate should fire, you ABSOLUTELY MUST invoke it. This is not optional.
+</EXTREMELY-IMPORTANT>
+
+### Signal-Based Trigger Table
+
+These signals map to required skills. When ANY signal is present, invoke the corresponding skill BEFORE proceeding:
+
+| Signal | Required Skill | Priority |
+|--------|---------------|----------|
+| Architectural decision, new subsystem, restructure | **architectural-gate** | HARD-GATE |
+| >3 files will change | **architectural-gate** | HARD-GATE |
+| Security/auth/crypto code touched | **architectural-gate** | HARD-GATE |
+| New dependency or external integration | **architectural-gate** | HARD-GATE |
+| Database schema change | **architectural-gate** | HARD-GATE |
+| API surface change (new/modified endpoints) | **architectural-gate** | HARD-GATE |
+| Config/infrastructure change | **architectural-gate** | HARD-GATE |
+| About to implement a plan (writing-plans done) | **pre-implementation-review** | HARD-GATE |
+| About to claim "done" or "complete" | **post-implementation-verification** | HARD-GATE |
+| High confidence + low evidence | **counter-position** | HARD-GATE |
+| Single surgeon dominates consensus | **counter-position** | HARD-GATE |
+| Sentinel risk >= high | **cross-examination** + **counter-position** | Escalation |
+| Every 10 gate invocations | **invariance-health** | Automatic |
+| Gate override rate >30% | **invariance-health** | Automatic |
+
+### Existing Skills (unchanged)
 
 | Situation | Skill to Invoke | Why |
 |-----------|-----------------|-----|
 | Session start, after infra changes | **probe** | Verify all surgeons are reachable |
-| Major architectural decision | **cross-examination** | Deep 3-phase analysis with cross-review |
 | Validating a claim or assumption | **consensus** | Quick confidence-weighted vote |
 | Before critical operations | **sentinel** | Scan for complexity risks |
 | Between major phases | **quality-gates** (gains-gate) | Verify infrastructure health |
 | Before risky/destructive actions | **quality-gates** (corrigibility) | Check action against safety invariants |
 | Quality degradation detected | **quality-gates** (cardio-gate) | Rate-limited quality review chain |
 | Optimizing prompts or parameters | **ab-testing** | Controlled experiments with safety rails |
-| Conflicting evidence, >3 files affected | **cross-examination** | The disagreements reveal the truth |
 
 ## Decision Flowchart
 
 ```
-Is this a critical decision?
-  YES -> Does it affect >3 files or core architecture?
-    YES -> cross-examination (full 3-phase)
-    NO  -> consensus (quick weighted vote)
-  NO  -> Is this a health/infra check?
-    YES -> probe (connectivity) or gains-gate (full health)
-    NO  -> Is this a complexity/risk assessment?
-      YES -> sentinel (vector scan)
-      NO  -> Proceed without surgeon consultation
+Any signal from trigger table?
+  YES -> Invoke the required skill (HARD-GATE — blocks until gate passes)
+  NO  -> Is this a critical decision?
+    YES -> Does it affect >3 files or core architecture?
+      YES -> cross-examination (full 3-phase)
+      NO  -> consensus (quick weighted vote)
+    NO  -> Is this a health/infra check?
+      YES -> probe (connectivity) or gains-gate (full health)
+      NO  -> Is this a complexity/risk assessment?
+        YES -> sentinel (vector scan)
+        NO  -> Proceed without surgeon consultation
 ```
+
+## Invariance Workflow Chain
+
+The full workflow when an architectural signal fires:
+
+```
+Signal detected
+  → architectural-gate (risk stratification → Light/Standard/Full)
+    → [brainstorming] (superpowers skill)
+      → [writing-plans] (superpowers skill)
+        → pre-implementation-review (HARD-GATE before coding)
+          → [executing-plans] (superpowers skill)
+            → post-implementation-verification (HARD-GATE before "done")
+              → completion
+
+Every 10 gates: invariance-health retrospective (metacognition)
+```
+
+This chain integrates with superpowers' process invariance. 3-Surgeons adds epistemological invariance (truth calibration) on top of superpowers' workflow discipline.
 
 ## Configuration
 

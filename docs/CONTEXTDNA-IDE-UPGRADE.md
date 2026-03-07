@@ -47,7 +47,7 @@ provider = LLMProvider(config)  # Raw HTTP, no adapter
 
 ```python
 from three_surgeons.core.models import LLMProvider
-from contextdna.adapters import priority_queue_adapter
+from context_dna.adapters import priority_queue_adapter
 
 provider = LLMProvider(config, query_adapter=priority_queue_adapter)
 ```
@@ -108,7 +108,7 @@ These components work identically in both modes:
 When upgrading a project from 3-Surgeons to ContextDNA IDE:
 
 1. **Install ContextDNA IDE** (separate package, includes 3-Surgeons as dependency)
-2. **Import the adapter**: `from contextdna.adapters import priority_queue_adapter`
+2. **Import the adapter**: `from context_dna.adapters import priority_queue_adapter`
 3. **Pass adapter to providers**: `LLMProvider(config, query_adapter=priority_queue_adapter)`
 4. **Migrate state** (optional): `contextdna migrate-state --from sqlite --to redis`
 5. **Migrate evidence** (optional): `contextdna migrate-evidence --from sqlite --to postgres`
