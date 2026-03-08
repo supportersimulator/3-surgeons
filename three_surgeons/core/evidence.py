@@ -156,6 +156,12 @@ class EvidenceStore:
                     conn.execute(f"ALTER TABLE cross_exams ADD COLUMN {col} TEXT")
                 except Exception:
                     pass  # Column already exists
+            # Migration: add mode_used and iteration_count columns
+            for col, col_type in [("mode_used", "TEXT"), ("iteration_count", "INTEGER")]:
+                try:
+                    conn.execute(f"ALTER TABLE cross_exams ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass  # Column already exists
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS cost_tracking ("
                 "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -303,6 +309,8 @@ class EvidenceStore:
         consensus_score: float,
         neurologist_exploration: str = "",
         cardiologist_exploration: str = "",
+        mode_used: str = "single",
+        iteration_count: int = 1,
     ) -> None:
         """Record a cross-examination between surgeons."""
         now = datetime.utcnow().isoformat()
@@ -311,11 +319,11 @@ class EvidenceStore:
                 "INSERT INTO cross_exams "
                 "(topic, neurologist_report, cardiologist_report, "
                 "neurologist_exploration, cardiologist_exploration, "
-                "consensus_score, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "consensus_score, mode_used, iteration_count, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (topic, neurologist_report, cardiologist_report,
                  neurologist_exploration, cardiologist_exploration,
-                 consensus_score, now),
+                 consensus_score, mode_used, iteration_count, now),
             )
             conn.commit()
 
@@ -325,7 +333,7 @@ class EvidenceStore:
             rows = conn.execute(
                 "SELECT id, topic, neurologist_report, cardiologist_report, "
                 "neurologist_exploration, cardiologist_exploration, "
-                "consensus_score, created_at "
+                "consensus_score, mode_used, iteration_count, created_at "
                 "FROM cross_exams ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
@@ -338,6 +346,8 @@ class EvidenceStore:
                 "neurologist_exploration": r["neurologist_exploration"] or "",
                 "cardiologist_exploration": r["cardiologist_exploration"] or "",
                 "consensus_score": r["consensus_score"],
+                "mode_used": r["mode_used"] or "single",
+                "iteration_count": r["iteration_count"] or 1,
                 "created_at": r["created_at"],
             }
             for r in rows

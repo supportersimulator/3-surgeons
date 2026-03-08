@@ -57,6 +57,23 @@ class TestEvidenceStore:
         assert stats["wins"] == 1
 
 
+class TestCrossExamMode:
+    """Cross-exams support mode_used and iteration_count columns."""
+
+    @pytest.fixture
+    def store(self, tmp_path: Path) -> EvidenceStore:
+        return EvidenceStore(str(tmp_path / "evidence.db"))
+
+    def test_cross_exam_records_mode(self, store: EvidenceStore) -> None:
+        store.record_cross_exam(
+            topic="test", neurologist_report="n", cardiologist_report="c",
+            consensus_score=0.8, mode_used="iterative", iteration_count=2,
+        )
+        exams = store.get_cross_exams(limit=1)
+        assert exams[0].get("mode_used") == "iterative"
+        assert exams[0].get("iteration_count") == 2
+
+
 class TestCrossExamOrdering:
     """Cross-exams return most recent first."""
 
