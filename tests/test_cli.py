@@ -211,6 +211,20 @@ class TestCrossExamMode:
         assert "no such option" not in (result.output or "").lower()
 
 
+class TestModeCommand:
+    """CLI 'mode' command for setting review depth."""
+
+    def test_mode_show_current(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["mode"])
+        assert result.exit_code == 0
+
+    def test_mode_set_continuous(self, tmp_path):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["mode", "continuous"])
+        assert "continuous" in (result.output or "").lower()
+
+
 class TestMainEntryPoint:
     """Test that the main() function exists and is callable."""
 

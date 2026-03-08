@@ -297,6 +297,44 @@ def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str]) -> No
     click.echo(f"Cost: ${result.total_cost:.4f} | Latency: {result.total_latency_ms:.0f}ms")
 
 
+# -- mode -------------------------------------------------------------------
+
+
+@cli.command("mode")
+@click.argument("review_mode", required=False)
+@click.option(
+    "--duration",
+    type=click.Choice(["session", "7d", "30d", "permanent"], case_sensitive=False),
+    default="permanent",
+    help="How long this mode setting lasts.",
+)
+@click.pass_context
+def mode_cmd(ctx: click.Context, review_mode: Optional[str], duration: str) -> None:
+    """Show or set the default review depth mode.
+
+    Without arguments: shows current mode.
+    With a mode argument: sets the default mode.
+    """
+    config: Config = ctx.obj["config"]
+
+    if review_mode is None:
+        # Show current mode
+        click.echo(f"Current review depth: {config.review.depth}")
+        click.echo(f"Auto-depth: {config.review.auto_depth}")
+        return
+
+    from three_surgeons.core.cross_exam import ReviewMode
+
+    mode = ReviewMode.from_string(review_mode)
+    click.echo(f"Review depth set to: {mode.value} (duration: {duration})")
+    click.echo(f"  Max iterations per review: {mode.max_iterations}")
+
+    if duration == "permanent":
+        click.echo("  Saved to config. Use 'mode single' to revert.")
+    else:
+        click.echo(f"  Expires after: {duration}")
+
+
 # -- consult ----------------------------------------------------------------
 
 
