@@ -434,6 +434,90 @@ class SurgeryTeam:
 
         return result
 
+    # ── cross_examine_iterative ──────────────────────────────────────
+
+    def cross_examine_iterative(
+        self,
+        topic: str,
+        mode: ReviewMode = ReviewMode.SINGLE,
+        consensus_threshold: float = 0.7,
+        depth: str = "full",
+    ) -> CrossExamResult:
+        """Iterative cross-examination that loops until consensus or max iterations.
+
+        Args:
+            topic: The topic to examine.
+            mode: ReviewMode controlling max iterations (SINGLE=1, ITERATIVE=3, CONTINUOUS=5).
+            consensus_threshold: Weighted score threshold to consider consensus reached.
+            depth: Depth parameter passed to each cross_examine call.
+
+        Returns:
+            CrossExamResult with iteration_count, mode_used, and escalation info.
+        """
+        max_iters = mode.max_iterations
+        accumulated_findings: list[str] = []
+        final: Optional[CrossExamResult] = None
+        total_cost = 0.0
+        consensus_reached = False
+
+        for i in range(1, max_iters + 1):
+            # Build topic: include prior findings after first iteration
+            if i == 1 or not accumulated_findings:
+                iter_topic = topic
+            else:
+                prior = "\n\n".join(accumulated_findings)
+                iter_topic = (
+                    f"{topic}\n\n"
+                    f"=== Prior iteration findings (iteration {i}/{max_iters}) ===\n"
+                    f"{prior}"
+                )
+
+            result = self.cross_examine(iter_topic, depth=depth)
+            total_cost += result.total_cost
+
+            # Accumulate findings for next iteration
+            parts = []
+            if result.synthesis:
+                parts.append(result.synthesis)
+            elif result.cardiologist_report:
+                parts.append(result.cardiologist_report)
+            if parts:
+                accumulated_findings.append(f"[Iteration {i}] " + " ".join(parts))
+
+            final = result
+
+            # For SINGLE mode, skip consensus check
+            if mode == ReviewMode.SINGLE:
+                break
+
+            # Check consensus after each iteration
+            consensus_result = self.consensus(
+                "All issues from this review have been addressed"
+            )
+            total_cost += consensus_result.total_cost
+
+            if consensus_result.weighted_score >= consensus_threshold:
+                consensus_reached = True
+                break
+
+        # Should always have a result, but guard anyway
+        assert final is not None
+
+        # Set iterative metadata on final result
+        final.iteration_count = i  # noqa: F821 — loop variable from for-loop
+        final.mode_used = mode.value
+        final.total_cost = total_cost
+
+        if not consensus_reached and mode != ReviewMode.SINGLE:
+            final.escalation_needed = True
+            final.unresolved_summary = (
+                f"Consensus not reached after {i} iterations "
+                f"(threshold={consensus_threshold}). "
+                f"Accumulated {len(accumulated_findings)} iteration findings."
+            )
+
+        return final
+
     # ── consensus ────────────────────────────────────────────────────
 
     def consensus(self, claim: str) -> ConsensusResult:

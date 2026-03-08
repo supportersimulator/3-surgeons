@@ -243,6 +243,96 @@ class TestConsensus:
         assert result.cardiologist_assessment == "unavailable"
 
 
+class TestCrossExamIterative:
+    """Iterative cross-examination: loop until consensus or max iterations."""
+
+    @pytest.fixture
+    def mock_team(self, tmp_path):
+        cardio = MagicMock()
+        cardio.query.return_value = LLMResponse(
+            ok=True,
+            content="Cardiologist analysis: SQLite is simpler",
+            latency_ms=200,
+            model="gpt-4.1-mini",
+            cost_usd=0.001,
+        )
+        neuro = MagicMock()
+        neuro.query.return_value = LLMResponse(
+            ok=True,
+            content="Neurologist analysis: SQLite handles concurrency poorly",
+            latency_ms=50,
+            model="qwen3:4b",
+        )
+        evidence = EvidenceStore(str(tmp_path / "evidence.db"))
+        state = MemoryBackend()
+        return SurgeryTeam(
+            cardiologist=cardio,
+            neurologist=neuro,
+            evidence=evidence,
+            state=state,
+        )
+
+    def test_iterative_single_mode_runs_once(self, mock_team):
+        from three_surgeons.core.cross_exam import ReviewMode
+        result = mock_team.cross_examine_iterative(
+            "Test topic", mode=ReviewMode.SINGLE
+        )
+        assert isinstance(result, CrossExamResult)
+        assert result.iteration_count == 1
+        assert result.mode_used == "single"
+        assert result.escalation_needed is False
+
+    def test_iterative_mode_loops_until_consensus(self, mock_team):
+        from three_surgeons.core.cross_exam import ReviewMode
+        # Mock consensus to return high score immediately
+        mock_team.consensus = MagicMock(return_value=ConsensusResult(
+            claim="all issues addressed",
+            cardiologist_confidence=0.9,
+            cardiologist_assessment="agree",
+            neurologist_confidence=0.8,
+            neurologist_assessment="agree",
+            weighted_score=0.85,
+        ))
+        result = mock_team.cross_examine_iterative(
+            "Test topic", mode=ReviewMode.ITERATIVE
+        )
+        assert result.iteration_count <= 3
+        assert result.escalation_needed is False
+
+    def test_iterative_mode_caps_at_max(self, mock_team):
+        from three_surgeons.core.cross_exam import ReviewMode
+        mock_team.consensus = MagicMock(return_value=ConsensusResult(
+            claim="all issues addressed",
+            cardiologist_confidence=0.5,
+            cardiologist_assessment="disagree",
+            neurologist_confidence=0.4,
+            neurologist_assessment="uncertain",
+            weighted_score=-0.3,
+        ))
+        result = mock_team.cross_examine_iterative(
+            "Test topic", mode=ReviewMode.ITERATIVE
+        )
+        assert result.iteration_count == 3
+        assert result.escalation_needed is True
+        assert result.unresolved_summary is not None
+
+    def test_continuous_mode_max_iterations_is_5(self, mock_team):
+        from three_surgeons.core.cross_exam import ReviewMode
+        mock_team.consensus = MagicMock(return_value=ConsensusResult(
+            claim="all issues addressed",
+            cardiologist_confidence=0.5,
+            cardiologist_assessment="disagree",
+            neurologist_confidence=0.4,
+            neurologist_assessment="uncertain",
+            weighted_score=-0.3,
+        ))
+        result = mock_team.cross_examine_iterative(
+            "Test topic", mode=ReviewMode.CONTINUOUS
+        )
+        assert result.iteration_count == 5
+        assert result.escalation_needed is True
+
+
 class TestReviewMode:
     """ReviewMode enum: single, iterative, continuous with iteration caps."""
 
