@@ -136,6 +136,14 @@ class StateConfig:
 
 
 @dataclass
+class ReviewConfig:
+    """Review loop mode configuration."""
+
+    depth: str = "single"       # single | iterative | continuous
+    auto_depth: str = "off"     # off | suggest | auto
+
+
+@dataclass
 class Config:
     """Top-level configuration for the 3-Surgeons system.
 
@@ -162,6 +170,7 @@ class Config:
     gates: GatesConfig = field(default_factory=GatesConfig)
     state: StateConfig = field(default_factory=StateConfig)
     gpu_lock_path: Optional[str] = None
+    review: ReviewConfig = field(default_factory=ReviewConfig)
 
     @classmethod
     def from_yaml(cls, path: Path) -> Config:
@@ -255,6 +264,10 @@ class Config:
         state_raw = raw.get("state", {})
         if isinstance(state_raw, dict):
             cfg.state = _merge_dataclass(cfg.state, state_raw)
+
+        review_raw = raw.get("review", {})
+        if isinstance(review_raw, dict):
+            cfg.review = _merge_dataclass(cfg.review, review_raw)
 
         return cfg
 

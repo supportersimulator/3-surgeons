@@ -287,3 +287,36 @@ def test_preset_hybrid_loads():
     cfg = Config.from_yaml(preset)
     assert cfg.cardiologist.provider == "openai"
     assert cfg.neurologist.provider == "ollama"
+
+
+class TestReviewConfig:
+    """Review depth configuration fields."""
+
+    def test_default_review_depth_is_single(self):
+        from three_surgeons.core.config import Config
+        config = Config()
+        assert config.review.depth == "single"
+
+    def test_default_auto_review_depth_is_off(self):
+        from three_surgeons.core.config import Config
+        config = Config()
+        assert config.review.auto_depth == "off"
+
+    def test_review_config_from_yaml(self, tmp_path):
+        from three_surgeons.core.config import Config
+        yaml_content = (
+            "review:\n"
+            "  depth: continuous\n"
+            "  auto_depth: suggest\n"
+        )
+        yaml_path = tmp_path / "config.yaml"
+        yaml_path.write_text(yaml_content)
+        config = Config.from_yaml(yaml_path)
+        assert config.review.depth == "continuous"
+        assert config.review.auto_depth == "suggest"
+
+    def test_auto_depth_validates_values(self):
+        from three_surgeons.core.config import Config
+        config = Config()
+        config.review.auto_depth = "auto"
+        assert config.review.auto_depth in ("off", "suggest", "auto")
