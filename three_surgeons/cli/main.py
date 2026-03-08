@@ -335,6 +335,64 @@ def mode_cmd(ctx: click.Context, review_mode: Optional[str], duration: str) -> N
         click.echo(f"  Expires after: {duration}")
 
 
+# -- review-weights ---------------------------------------------------------
+
+
+@cli.group("review-weights", invoke_without_command=True)
+@click.pass_context
+def review_weights(ctx: click.Context) -> None:
+    """Manage adaptive review depth weights."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(weights_show)
+
+
+@review_weights.command("show")
+@click.pass_context
+def weights_show(ctx: click.Context) -> None:
+    """Show current learned mode weights."""
+    config: Config = ctx.obj["config"]
+    evidence = EvidenceStore(str(config.evidence.resolved_path))
+    weights = evidence.get_mode_weights()
+    if not weights:
+        click.echo("No review outcomes recorded yet. Weights will build over time.")
+        return
+    click.echo("Learned review depth weights:")
+    for mode_name, weight in sorted(weights.items()):
+        click.echo(f"  {mode_name}: {weight:.3f}")
+
+
+@review_weights.command("export")
+@click.option("--output", "-o", default="-", help="Output file (default: stdout)")
+@click.pass_context
+def weights_export(ctx: click.Context, output: str) -> None:
+    """Export review outcomes for cross-machine sharing."""
+    import json
+
+    config: Config = ctx.obj["config"]
+    evidence = EvidenceStore(str(config.evidence.resolved_path))
+    data = evidence.export_review_outcomes()
+    json_str = json.dumps(data, indent=2)
+    if output == "-":
+        click.echo(json_str)
+    else:
+        Path(output).write_text(json_str)
+        click.echo(f"Exported {len(data)} outcomes to {output}")
+
+
+@review_weights.command("import")
+@click.argument("input_file", type=click.Path(exists=True))
+@click.pass_context
+def weights_import(ctx: click.Context, input_file: str) -> None:
+    """Import review outcomes from another machine."""
+    import json
+
+    config: Config = ctx.obj["config"]
+    evidence = EvidenceStore(str(config.evidence.resolved_path))
+    data = json.loads(Path(input_file).read_text())
+    count = evidence.import_review_outcomes(data)
+    click.echo(f"Imported {count} review outcomes.")
+
+
 # -- consult ----------------------------------------------------------------
 
 

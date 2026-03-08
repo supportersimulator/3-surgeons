@@ -225,6 +225,21 @@ class TestModeCommand:
         assert "continuous" in (result.output or "").lower()
 
 
+class TestReviewWeightsCommand:
+    """CLI review-weights commands."""
+
+    def test_weights_show(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["review-weights"])
+        assert result.exit_code == 0
+
+    def test_weights_export(self, tmp_path):
+        runner = CliRunner()
+        out_file = str(tmp_path / "weights.json")
+        result = runner.invoke(cli, ["review-weights", "export", "--output", out_file])
+        assert result.exit_code == 0
+
+
 class TestMainEntryPoint:
     """Test that the main() function exists and is callable."""
 
