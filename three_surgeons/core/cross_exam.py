@@ -516,6 +516,21 @@ class SurgeryTeam:
                 f"Accumulated {len(accumulated_findings)} iteration findings."
             )
 
+        # Record outcome for adaptive learning
+        consensus_score = 0.0
+        if mode != ReviewMode.SINGLE:
+            final_check = self.consensus("All issues from this review have been addressed")
+            consensus_score = final_check.weighted_score
+
+        self._evidence.record_review_outcome(
+            topic=topic,
+            mode_used=mode.value,
+            iteration_count=len(accumulated_findings),
+            consensus_reached=not final.escalation_needed,
+            consensus_score=consensus_score,
+            escalation_needed=final.escalation_needed,
+        )
+
         return final
 
     # ── consensus ────────────────────────────────────────────────────

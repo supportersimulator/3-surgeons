@@ -332,6 +332,16 @@ class TestCrossExamIterative:
         assert result.iteration_count == 5
         assert result.escalation_needed is True
 
+    def test_iterative_records_outcome_to_evidence(self, mock_team):
+        """Review outcomes should be logged to evidence store."""
+        result = mock_team.cross_examine_iterative(
+            "Test topic", mode=ReviewMode.ITERATIVE
+        )
+        # Check evidence store was called
+        outcomes = mock_team._evidence.get_review_outcomes(limit=1)
+        assert len(outcomes) == 1
+        assert outcomes[0]["mode_used"] == "iterative"
+
 
 class TestReviewMode:
     """ReviewMode enum: single, iterative, continuous with iteration caps."""
