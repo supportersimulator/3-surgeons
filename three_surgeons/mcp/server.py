@@ -15,7 +15,7 @@ from typing import Optional
 from three_surgeons.core.ab_testing import ABTestEngine
 from three_surgeons.core.cardio import ab_validate, cardio_review
 from three_surgeons.core.config import Config
-from three_surgeons.core.cross_exam import SurgeryTeam
+from three_surgeons.core.cross_exam import ReviewMode, SurgeryTeam
 from three_surgeons.core.direct import ask_local, ask_remote
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.gates import GainsGate
@@ -129,10 +129,17 @@ def _probe() -> dict:
     return results
 
 
-def _cross_examine(topic: str, depth: str = "full") -> dict:
-    """Full cross-examination protocol."""
+def _cross_examine(topic: str, depth: str = "full", mode: str = "single") -> dict:
+    """Full cross-examination protocol with iterative review support.
+
+    Args:
+        topic: The topic to cross-examine.
+        depth: Depth of analysis ("full" or "quick").
+        mode: Review mode — "single" (1 pass), "iterative" (up to 3), "continuous" (up to 5).
+    """
     team = _build_surgery_team()
-    result = team.cross_examine(topic, depth=depth)
+    parsed_mode = ReviewMode.from_string(mode)
+    result = team.cross_examine_iterative(topic, mode=parsed_mode, depth=depth)
     return {
         "topic": result.topic,
         "cardiologist_report": result.cardiologist_report,
@@ -142,6 +149,10 @@ def _cross_examine(topic: str, depth: str = "full") -> dict:
         "synthesis": result.synthesis,
         "total_cost": result.total_cost,
         "total_latency_ms": result.total_latency_ms,
+        "iteration_count": result.iteration_count,
+        "mode_used": result.mode_used,
+        "escalation_needed": result.escalation_needed,
+        "unresolved_summary": result.unresolved_summary,
     }
 
 
@@ -388,9 +399,9 @@ try:
         return _probe()
 
     @_mcp_app.tool()
-    def cross_examine(topic: str, depth: str = "full") -> dict:
-        """Full cross-examination protocol."""
-        return _cross_examine(topic, depth=depth)
+    def cross_examine(topic: str, depth: str = "full", mode: str = "single") -> dict:
+        """Full cross-examination protocol with iterative review support."""
+        return _cross_examine(topic, depth=depth, mode=mode)
 
     @_mcp_app.tool()
     def consult(topic: str) -> dict:

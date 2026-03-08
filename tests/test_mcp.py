@@ -303,7 +303,7 @@ class TestToolDelegation:
             assert result["topic"] == "test topic"
 
     def test_cross_examine_delegates_to_surgery_team(self):
-        """cross_examine() should call SurgeryTeam.cross_examine()."""
+        """cross_examine() should call SurgeryTeam.cross_examine_iterative()."""
         from three_surgeons.mcp.server import _cross_examine
 
         with patch("three_surgeons.mcp.server._build_surgery_team") as mock_team_fn:
@@ -311,16 +311,23 @@ class TestToolDelegation:
                 topic="deep topic",
                 cardiologist_report="cardio deep analysis",
                 neurologist_report="neuro deep analysis",
+                cardiologist_exploration="explore-c",
+                neurologist_exploration="explore-n",
                 synthesis="synthesis here",
                 total_cost=0.05,
                 total_latency_ms=2000,
+                iteration_count=1,
+                mode_used="single",
+                escalation_needed=False,
+                unresolved_summary=None,
             )
-            mock_team_fn.return_value.cross_examine.return_value = mock_result
+            mock_team_fn.return_value.cross_examine_iterative.return_value = mock_result
 
             result = _cross_examine("deep topic", depth="full")
 
-            mock_team_fn.return_value.cross_examine.assert_called_once_with(
-                "deep topic", depth="full"
+            from three_surgeons.core.cross_exam import ReviewMode
+            mock_team_fn.return_value.cross_examine_iterative.assert_called_once_with(
+                "deep topic", mode=ReviewMode.SINGLE, depth="full"
             )
             assert isinstance(result, dict)
             assert "synthesis" in result
@@ -437,6 +444,85 @@ class TestToolDelegation:
                 "test-123", "variant_b wins"
             )
             assert result["verdict"] == "variant_b wins"
+
+
+class TestCrossExamineMode:
+    """cross_examine MCP tool accepts mode parameter and delegates to cross_examine_iterative."""
+
+    def test_cross_examine_accepts_mode_parameter(self):
+        """_cross_examine() should accept a mode parameter."""
+        import inspect
+        from three_surgeons.mcp.server import _cross_examine
+
+        sig = inspect.signature(_cross_examine)
+        assert "mode" in sig.parameters, "mode parameter missing from _cross_examine"
+
+    def test_cross_examine_passes_mode_to_iterative(self):
+        """_cross_examine() should call cross_examine_iterative with parsed ReviewMode."""
+        from three_surgeons.mcp.server import _cross_examine
+
+        with patch("three_surgeons.mcp.server._build_surgery_team") as mock_team_fn:
+            mock_result = MagicMock(
+                topic="test topic",
+                cardiologist_report="cardio",
+                neurologist_report="neuro",
+                cardiologist_exploration="explore-c",
+                neurologist_exploration="explore-n",
+                synthesis="synth",
+                total_cost=0.05,
+                total_latency_ms=2000,
+                iteration_count=1,
+                mode_used="single",
+                escalation_needed=False,
+                unresolved_summary=None,
+            )
+            mock_team_fn.return_value.cross_examine_iterative.return_value = mock_result
+
+            result = _cross_examine("test topic", mode="iterative")
+
+            mock_team_fn.return_value.cross_examine_iterative.assert_called_once()
+            call_kwargs = mock_team_fn.return_value.cross_examine_iterative.call_args
+            # Verify mode was parsed from string to ReviewMode
+            from three_surgeons.core.cross_exam import ReviewMode
+            assert call_kwargs.kwargs.get("mode") == ReviewMode.ITERATIVE or \
+                   call_kwargs[1].get("mode") == ReviewMode.ITERATIVE
+
+    def test_cross_examine_default_mode_is_single(self):
+        """_cross_examine() should default mode to 'single'."""
+        import inspect
+        from three_surgeons.mcp.server import _cross_examine
+
+        sig = inspect.signature(_cross_examine)
+        default = sig.parameters["mode"].default
+        assert default == "single"
+
+    def test_cross_examine_returns_iteration_metadata(self):
+        """_cross_examine() should include iteration_count, mode_used in result."""
+        from three_surgeons.mcp.server import _cross_examine
+
+        with patch("three_surgeons.mcp.server._build_surgery_team") as mock_team_fn:
+            mock_result = MagicMock(
+                topic="t",
+                cardiologist_report="c",
+                neurologist_report="n",
+                cardiologist_exploration="ec",
+                neurologist_exploration="en",
+                synthesis="s",
+                total_cost=0.01,
+                total_latency_ms=100,
+                iteration_count=3,
+                mode_used="iterative",
+                escalation_needed=True,
+                unresolved_summary="not resolved",
+            )
+            mock_team_fn.return_value.cross_examine_iterative.return_value = mock_result
+
+            result = _cross_examine("t", mode="iterative")
+
+            assert result["iteration_count"] == 3
+            assert result["mode_used"] == "iterative"
+            assert result["escalation_needed"] is True
+            assert result["unresolved_summary"] == "not resolved"
 
 
 class TestErrorHandling:
