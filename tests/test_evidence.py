@@ -298,3 +298,72 @@ class TestEvidenceGradeUpgrade:
             store.record_outcome(obs_id, success=False)
         result = store.auto_upgrade_grade(obs_id)
         assert result is None  # 40% < 50% threshold
+
+
+class TestReviewOutcomes:
+    """Evidence store: review outcome tracking for adaptive learning."""
+
+    @pytest.fixture
+    def store(self, tmp_path):
+        return EvidenceStore(str(tmp_path / "evidence.db"))
+
+    def test_record_review_outcome(self, store):
+        store.record_review_outcome(
+            topic="Test review",
+            mode_used="iterative",
+            iteration_count=2,
+            consensus_reached=True,
+            consensus_score=0.85,
+            files_changed=5,
+            escalation_needed=False,
+            user_override=None,
+        )
+        outcomes = store.get_review_outcomes(limit=1)
+        assert len(outcomes) == 1
+        assert outcomes[0]["mode_used"] == "iterative"
+        assert outcomes[0]["iteration_count"] == 2
+        assert outcomes[0]["consensus_reached"] is True
+
+    def test_get_mode_weights(self, store):
+        """Mode weights computed from outcome history."""
+        store.record_review_outcome(
+            topic="A", mode_used="iterative", iteration_count=2,
+            consensus_reached=True, consensus_score=0.9,
+            files_changed=5, escalation_needed=False, user_override=None,
+        )
+        store.record_review_outcome(
+            topic="B", mode_used="iterative", iteration_count=1,
+            consensus_reached=True, consensus_score=0.8,
+            files_changed=3, escalation_needed=False, user_override=None,
+        )
+        store.record_review_outcome(
+            topic="C", mode_used="single", iteration_count=1,
+            consensus_reached=True, consensus_score=0.5,
+            files_changed=8, escalation_needed=False, user_override="iterative",
+        )
+        weights = store.get_mode_weights()
+        assert isinstance(weights, dict)
+        assert "iterative" in weights
+        assert "single" in weights
+
+    def test_export_review_outcomes(self, store):
+        store.record_review_outcome(
+            topic="Test", mode_used="single", iteration_count=1,
+            consensus_reached=True, consensus_score=0.9,
+            files_changed=2, escalation_needed=False, user_override=None,
+        )
+        exported = store.export_review_outcomes()
+        assert isinstance(exported, list)
+        assert len(exported) == 1
+
+    def test_import_review_outcomes(self, store):
+        data = [{
+            "topic": "Imported", "mode_used": "continuous",
+            "iteration_count": 3, "consensus_reached": True,
+            "consensus_score": 0.75, "files_changed": 10,
+            "escalation_needed": False, "user_override": None,
+            "created_at": "2026-03-08T00:00:00",
+        }]
+        store.import_review_outcomes(data)
+        outcomes = store.get_review_outcomes(limit=1)
+        assert outcomes[0]["topic"] == "Imported"

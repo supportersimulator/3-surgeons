@@ -216,6 +216,20 @@ class EvidenceStore:
                 "  FOREIGN KEY (observation_id) REFERENCES observations(id)"
                 ")"
             )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS review_outcomes ("
+                "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                "  topic TEXT NOT NULL,"
+                "  mode_used TEXT NOT NULL,"
+                "  iteration_count INTEGER NOT NULL,"
+                "  consensus_reached INTEGER NOT NULL,"
+                "  consensus_score REAL NOT NULL,"
+                "  files_changed INTEGER NOT NULL DEFAULT 0,"
+                "  escalation_needed INTEGER NOT NULL DEFAULT 0,"
+                "  user_override TEXT,"
+                "  created_at TEXT NOT NULL"
+                ")"
+            )
             conn.commit()
 
     # ── Learnings ──────────────────────────────────────────────────────
@@ -507,6 +521,102 @@ class EvidenceStore:
             }
             for r in rows
         ]
+
+    # ── Review Outcomes (Adaptive Learning) ──────────────────────────
+
+    def record_review_outcome(
+        self,
+        topic: str,
+        mode_used: str,
+        iteration_count: int,
+        consensus_reached: bool,
+        consensus_score: float,
+        files_changed: int = 0,
+        escalation_needed: bool = False,
+        user_override: Optional[str] = None,
+    ) -> None:
+        """Record the outcome of a review loop for adaptive weight learning."""
+        now = datetime.utcnow().isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO review_outcomes "
+                "(topic, mode_used, iteration_count, consensus_reached, "
+                "consensus_score, files_changed, escalation_needed, "
+                "user_override, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (topic, mode_used, iteration_count, int(consensus_reached),
+                 consensus_score, files_changed, int(escalation_needed),
+                 user_override, now),
+            )
+            conn.commit()
+
+    def get_review_outcomes(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Get recent review outcomes, newest first."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM review_outcomes ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "topic": r["topic"],
+                "mode_used": r["mode_used"],
+                "iteration_count": r["iteration_count"],
+                "consensus_reached": bool(r["consensus_reached"]),
+                "consensus_score": r["consensus_score"],
+                "files_changed": r["files_changed"],
+                "escalation_needed": bool(r["escalation_needed"]),
+                "user_override": r["user_override"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    def get_mode_weights(self) -> Dict[str, float]:
+        """Compute adaptive mode weights from outcome history.
+
+        Weight = success_rate * avg_consensus for each mode.
+        Higher weight = mode tends to produce good outcomes.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT mode_used, "
+                "COUNT(*) as n, "
+                "AVG(consensus_reached) as success_rate, "
+                "AVG(consensus_score) as avg_consensus "
+                "FROM review_outcomes GROUP BY mode_used"
+            ).fetchall()
+        weights = {}
+        for r in rows:
+            weights[r["mode_used"]] = round(
+                float(r["success_rate"]) * float(r["avg_consensus"]), 3
+            )
+        return weights
+
+    def export_review_outcomes(self) -> List[Dict[str, Any]]:
+        """Export all review outcomes for cross-machine sharing."""
+        return self.get_review_outcomes(limit=10000)
+
+    def import_review_outcomes(self, data: List[Dict[str, Any]]) -> int:
+        """Import review outcomes from another machine. Returns count imported."""
+        count = 0
+        with self._connect() as conn:
+            for item in data:
+                conn.execute(
+                    "INSERT INTO review_outcomes "
+                    "(topic, mode_used, iteration_count, consensus_reached, "
+                    "consensus_score, files_changed, escalation_needed, "
+                    "user_override, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (item["topic"], item["mode_used"], item["iteration_count"],
+                     int(item["consensus_reached"]), item["consensus_score"],
+                     item.get("files_changed", 0), int(item.get("escalation_needed", False)),
+                     item.get("user_override"), item["created_at"]),
+                )
+                count += 1
+            conn.commit()
+        return count
 
     # ── Stats ──────────────────────────────────────────────────────────
 
