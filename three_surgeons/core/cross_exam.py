@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional, Protocol
 
 from three_surgeons.core.evidence import EvidenceStore
@@ -42,6 +43,30 @@ class LLMResponseLike(Protocol):
     cost_usd: float
 
 
+# ── Review Mode ──────────────────────────────────────────────────────
+
+
+class ReviewMode(Enum):
+    """Controls how many cross-exam iterations the review loop performs."""
+
+    SINGLE = "single"
+    ITERATIVE = "iterative"
+    CONTINUOUS = "continuous"
+
+    @property
+    def max_iterations(self) -> int:
+        """Maximum number of review iterations for this mode."""
+        return {"single": 1, "iterative": 3, "continuous": 5}[self.value]
+
+    @classmethod
+    def from_string(cls, value: str) -> "ReviewMode":
+        """Parse a string to ReviewMode, case-insensitive. Defaults to SINGLE."""
+        try:
+            return cls(value.lower())
+        except ValueError:
+            return cls.SINGLE
+
+
 # ── Result Dataclasses ───────────────────────────────────────────────
 
 
@@ -58,6 +83,10 @@ class CrossExamResult:
     total_cost: float = 0.0
     total_latency_ms: float = 0.0
     warnings: list = field(default_factory=list)
+    iteration_count: int = 1
+    mode_used: str = "single"
+    escalation_needed: bool = False
+    unresolved_summary: Optional[str] = None
 
     @property
     def surgeon_count(self) -> int:

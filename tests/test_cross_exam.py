@@ -13,6 +13,7 @@ import pytest
 from three_surgeons.core.cross_exam import (
     ConsensusResult,
     CrossExamResult,
+    ReviewMode,
     SurgeryTeam,
 )
 from three_surgeons.core.evidence import EvidenceStore
@@ -240,6 +241,30 @@ class TestConsensus:
         assert isinstance(result, ConsensusResult)
         assert result.cardiologist_confidence == pytest.approx(0.0)
         assert result.cardiologist_assessment == "unavailable"
+
+
+class TestReviewMode:
+    """ReviewMode enum: single, iterative, continuous with iteration caps."""
+
+    def test_single_mode_max_iterations_is_1(self):
+        assert ReviewMode.SINGLE.max_iterations == 1
+
+    def test_iterative_mode_max_iterations_is_3(self):
+        assert ReviewMode.ITERATIVE.max_iterations == 3
+
+    def test_continuous_mode_max_iterations_is_5(self):
+        assert ReviewMode.CONTINUOUS.max_iterations == 5
+
+    def test_mode_from_string(self):
+        assert ReviewMode.from_string("single") == ReviewMode.SINGLE
+        assert ReviewMode.from_string("iterative") == ReviewMode.ITERATIVE
+        assert ReviewMode.from_string("continuous") == ReviewMode.CONTINUOUS
+
+    def test_mode_from_string_invalid_defaults_to_single(self):
+        assert ReviewMode.from_string("bogus") == ReviewMode.SINGLE
+
+    def test_mode_from_string_case_insensitive(self):
+        assert ReviewMode.from_string("ITERATIVE") == ReviewMode.ITERATIVE
 
 
 class TestEvidenceLogging:
