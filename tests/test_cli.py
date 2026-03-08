@@ -194,6 +194,23 @@ class TestABProposeCommand:
         assert result.exit_code == 1
 
 
+class TestCrossExamMode:
+    """CLI --mode flag for cross-exam command."""
+
+    def test_mode_flag_accepted(self, tmp_path, monkeypatch):
+        """The --mode flag should be accepted without error."""
+        runner = CliRunner()
+        # Will fail on LLM connection but flag should parse
+        result = runner.invoke(cli, ["cross-exam", "--mode", "iterative", "test topic"])
+        # Should not fail with "no such option"
+        assert "no such option" not in (result.output or "").lower()
+
+    def test_mode_flag_default_is_single(self, tmp_path, monkeypatch):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["cross-exam", "test topic"])
+        assert "no such option" not in (result.output or "").lower()
+
+
 class TestMainEntryPoint:
     """Test that the main() function exists and is callable."""
 

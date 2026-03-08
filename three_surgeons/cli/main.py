@@ -6,6 +6,7 @@ Entry points: main() function and cli click group.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import click
 import yaml
@@ -227,10 +228,17 @@ def probe(ctx: click.Context) -> None:
 
 @cli.command("cross-exam")
 @click.argument("topic")
+@click.option(
+    "--mode",
+    "review_mode",
+    type=click.Choice(["single", "iterative", "continuous"], case_sensitive=False),
+    default=None,
+    help="Review loop depth: single (1 pass), iterative (up to 3), continuous (up to 5).",
+)
 @click.pass_context
-def cross_exam(ctx: click.Context, topic: str) -> None:
+def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str]) -> None:
     """Full cross-examination protocol."""
-    from three_surgeons.core.cross_exam import SurgeryTeam
+    from three_surgeons.core.cross_exam import ReviewMode, SurgeryTeam
 
     config: Config = ctx.obj["config"]
     state = create_backend_from_config(config.state)
@@ -241,8 +249,13 @@ def cross_exam(ctx: click.Context, topic: str) -> None:
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
     )
 
-    click.echo(f"Cross-examining: {topic}\n")
-    result = team.cross_examine(topic)
+    # Resolve mode: CLI flag > config default
+    mode = ReviewMode.from_string(
+        review_mode or config.review.depth
+    )
+
+    click.echo(f"Cross-examining ({mode.value} mode, max {mode.max_iterations} iterations): {topic}\n")
+    result = team.cross_examine_iterative(topic, mode=mode)
 
     # Surface degradation warnings
     for warning in result.warnings:
@@ -272,6 +285,14 @@ def cross_exam(ctx: click.Context, topic: str) -> None:
         click.echo("--- Synthesis ---")
         click.echo(result.synthesis)
         click.echo()
+
+    # Iteration summary
+    if result.iteration_count > 1:
+        click.echo(f"Iterations: {result.iteration_count}/{mode.max_iterations}")
+    if result.escalation_needed:
+        click.echo("[ESCALATION] Consensus not reached — human review needed.", err=True)
+        if result.unresolved_summary:
+            click.echo(f"  {result.unresolved_summary}", err=True)
 
     click.echo(f"Cost: ${result.total_cost:.4f} | Latency: {result.total_latency_ms:.0f}ms")
 
