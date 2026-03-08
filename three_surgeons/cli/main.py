@@ -330,9 +330,17 @@ def mode_cmd(ctx: click.Context, review_mode: Optional[str], duration: str) -> N
     click.echo(f"  Max iterations per review: {mode.max_iterations}")
 
     if duration == "permanent":
-        click.echo("  Saved to config. Use 'mode single' to revert.")
+        # Persist to ~/.3surgeons/config.yaml
+        config_path = Path.home() / ".3surgeons" / "config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        raw = {}
+        if config_path.is_file():
+            raw = yaml.safe_load(config_path.read_text()) or {}
+        raw.setdefault("review", {})["depth"] = mode.value
+        config_path.write_text(yaml.dump(raw, default_flow_style=False))
+        click.echo(f"  Saved to {config_path}. Use '3s mode single' to revert.")
     else:
-        click.echo(f"  Expires after: {duration}")
+        click.echo(f"  Duration '{duration}' is session-display only (not persisted to config).")
 
 
 # -- review-weights ---------------------------------------------------------

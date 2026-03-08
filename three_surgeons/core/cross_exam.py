@@ -501,7 +501,10 @@ class SurgeryTeam:
                 break
 
         # Should always have a result, but guard anyway
-        assert final is not None
+        if final is None:
+            raise RuntimeError(
+                f"cross_examine_iterative produced no result after {max_iters} iterations"
+            )
 
         # Set iterative metadata on final result
         final.iteration_count = i  # noqa: F821 — loop variable from for-loop
@@ -517,15 +520,18 @@ class SurgeryTeam:
             )
 
         # Record outcome for adaptive learning
-        consensus_score = 0.0
-        if mode != ReviewMode.SINGLE:
-            final_check = self.consensus("All issues from this review have been addressed")
-            consensus_score = final_check.weighted_score
+        # Use the last loop iteration's consensus score (already computed above)
+        # instead of making a redundant second consensus call.
+        consensus_score = (
+            consensus_result.weighted_score
+            if mode != ReviewMode.SINGLE
+            else 0.0
+        )
 
         self._evidence.record_review_outcome(
             topic=topic,
             mode_used=mode.value,
-            iteration_count=len(accumulated_findings),
+            iteration_count=final.iteration_count,
             consensus_reached=not final.escalation_needed,
             consensus_score=consensus_score,
             escalation_needed=final.escalation_needed,
