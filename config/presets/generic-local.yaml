@@ -1,7 +1,7 @@
-# 3-Surgeons: Local-Only Mode
-# Both surgeons use local LLM models. No API keys needed. $0 cost.
-# Works with: Ollama, MLX, LM Studio, vLLM, or any /v1/chat/completions endpoint.
-# Run '3s init' to auto-detect your local backend and models.
+# 3-Surgeons: Generic Local Mode
+# Both surgeons use any OpenAI-compatible local server. $0 cost.
+# Works with: MLX, vLLM, LM Studio, Ollama, or any /v1/chat/completions endpoint.
+# Required: Local LLM server running. Run '3s init' to auto-detect.
 surgeons:
   cardiologist:
     role: "External perspective — cross-examination, evidence"

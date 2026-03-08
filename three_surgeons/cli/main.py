@@ -28,18 +28,32 @@ def cli(ctx: click.Context) -> None:
 
 
 @cli.command()
-def init() -> None:
+@click.option("--detect", is_flag=True, help="Auto-detect local LLM backends")
+def init(detect: bool) -> None:
     """Interactive setup wizard."""
     import shutil
+
+    from three_surgeons.core.config import detect_local_backend
 
     click.echo("3-Surgeons Setup Wizard")
     click.echo("=" * 40)
 
-    # Preset selection
+    # Auto-detect local backends
+    click.echo("\nScanning for local LLM backends...")
+    backends = detect_local_backend()
+
+    if backends:
+        for b in backends:
+            models_str = ", ".join(b["models"][:5]) if b["models"] else "no models listed"
+            click.echo(f"  Detected: {b['provider']} on port {b['port']} ({models_str})")
+    else:
+        click.echo("  No local LLM backends detected.")
+
+    # Build preset menu dynamically
     click.echo("\nChoose a preset:")
-    click.echo("  1. Hybrid (Recommended) -- OpenAI + local Ollama")
+    click.echo("  1. Hybrid (Recommended) -- OpenAI + local LLM")
     click.echo("  2. API-Only -- OpenAI + DeepSeek (no local LLM)")
-    click.echo("  3. Local-Only -- Ollama only ($0 cost)")
+    click.echo("  3. Local-Only -- local LLM only ($0 cost)")
     click.echo("  4. Custom -- configure manually")
     preset = click.prompt("Selection", type=int, default=1)
 
@@ -52,19 +66,30 @@ def init() -> None:
 
     if preset in preset_map and (presets_dir / preset_map[preset]).exists():
         shutil.copy(presets_dir / preset_map[preset], config_path)
+
+        # If a local backend was detected and preset uses local, patch the config
+        if backends and preset in (1, 3):
+            _patch_neurologist_from_detection(config_path, backends[0])
+
         click.echo(f"\nPreset '{preset_map[preset]}' written to {config_path}")
     else:
         # Manual config (custom wizard)
+        # Pre-fill defaults from detected backend if available
+        detected = backends[0] if backends else None
+        default_neuro_provider = detected["provider"] if detected else "ollama"
+        default_neuro_endpoint = detected["endpoint"] if detected else "http://localhost:11434/v1"
+        default_neuro_model = detected["models"][0] if detected and detected["models"] else "qwen3:4b"
+
         click.echo("\n--- Cardiologist (external model) ---")
         cardio_provider = click.prompt("Provider", default="openai")
         cardio_model = click.prompt("Model", default="gpt-4.1-mini")
         cardio_endpoint = click.prompt("Endpoint", default="https://api.openai.com/v1")
         cardio_api_key_env = click.prompt("API key env var", default="OPENAI_API_KEY")
 
-        click.echo("\n--- Neurologist ---")
-        neuro_provider = click.prompt("Provider", default="ollama")
-        neuro_model = click.prompt("Model", default="qwen3:4b")
-        neuro_endpoint = click.prompt("Endpoint", default="http://localhost:11434/v1")
+        click.echo(f"\n--- Neurologist (detected: {default_neuro_provider}) ---")
+        neuro_provider = click.prompt("Provider", default=default_neuro_provider)
+        neuro_model = click.prompt("Model", default=default_neuro_model)
+        neuro_endpoint = click.prompt("Endpoint", default=default_neuro_endpoint)
         neuro_api_key_env = click.prompt("API key env var (blank if local)", default="")
 
         config_data = {
@@ -93,6 +118,27 @@ def init() -> None:
 
     click.echo("\nSecurity reminder: NEVER commit API keys. Use environment variables.")
     click.echo("Run '3s probe' to verify connectivity.")
+    click.echo(
+        "\nTip: If you're using a coding agent (Claude Code, Cursor, etc.), just ask it"
+        "\n     to 'set up the surgery team' — it can detect your backends, help configure"
+        "\n     API keys securely, and verify everything is connected."
+    )
+
+
+def _patch_neurologist_from_detection(config_path: Path, detected: dict) -> None:
+    """Patch an existing config file to use the detected local backend."""
+    raw = yaml.safe_load(config_path.read_text()) or {}
+    surgeons = raw.get("surgeons", {})
+    neuro = surgeons.get("neurologist", {})
+
+    neuro["provider"] = detected["provider"]
+    neuro["endpoint"] = detected["endpoint"]
+    if detected["models"]:
+        neuro["model"] = detected["models"][0]
+
+    surgeons["neurologist"] = neuro
+    raw["surgeons"] = surgeons
+    config_path.write_text(yaml.dump(raw, default_flow_style=False))
 
 
 # -- probe ------------------------------------------------------------------
@@ -101,7 +147,9 @@ def init() -> None:
 @cli.command()
 @click.pass_context
 def probe(ctx: click.Context) -> None:
-    """Health check all 3 surgeons."""
+    """Health check all 3 surgeons with diagnostic details."""
+    import httpx
+
     config: Config = ctx.obj["config"]
     click.echo("Probing surgeons...\n")
 
@@ -110,22 +158,65 @@ def probe(ctx: click.Context) -> None:
         ("Cardiologist", config.cardiologist),
         ("Neurologist", config.neurologist),
     ]:
+        # Step 1: Check if API key is needed and present
+        is_local = surgeon_cfg.provider in ("ollama", "mlx", "local", "vllm", "lmstudio")
+        if not is_local and not surgeon_cfg.get_api_key():
+            env_var = surgeon_cfg.api_key_env or "(not configured)"
+            click.echo(f"  {name}: FAIL -- API key missing. Set {env_var} env var.")
+            all_ok = False
+            continue
+
+        # Step 2: Check endpoint reachability
+        endpoint = surgeon_cfg.endpoint.rstrip("/")
+        try:
+            models_resp = httpx.get(f"{endpoint}/models", timeout=3.0)
+            endpoint_ok = models_resp.status_code == 200
+        except (httpx.ConnectError, httpx.TimeoutException):
+            click.echo(
+                f"  {name}: FAIL -- endpoint unreachable ({endpoint}). "
+                f"Is your {surgeon_cfg.provider} server running?"
+            )
+            all_ok = False
+            continue
+        except Exception as exc:
+            click.echo(f"  {name}: FAIL -- endpoint error: {exc}")
+            all_ok = False
+            continue
+
+        # Step 3: Check if the configured model exists
+        model_found = True
+        if endpoint_ok:
+            try:
+                data = models_resp.json()
+                if isinstance(data, dict) and "data" in data:
+                    available = [m.get("id", "") for m in data["data"] if isinstance(m, dict)]
+                    if available and surgeon_cfg.model not in available:
+                        model_found = False
+                        click.echo(
+                            f"  {name}: WARN -- endpoint OK but model '{surgeon_cfg.model}' "
+                            f"not found. Available: {', '.join(available[:5])}"
+                        )
+            except Exception:
+                pass  # models listing is best-effort
+
+        # Step 4: Test actual LLM call
         try:
             provider = LLMProvider(surgeon_cfg)
-            resp = provider.ping(timeout_s=5.0)
+            resp = provider.ping(timeout_s=10.0)
             if resp.ok:
-                click.echo(f"  {name}: OK ({resp.latency_ms}ms)")
+                status = "OK" if model_found else "OK (model responded but not in /models list)"
+                click.echo(f"  {name}: {status} ({resp.latency_ms}ms)")
             else:
-                click.echo(f"  {name}: FAIL -- {resp.content[:80]}")
+                click.echo(f"  {name}: FAIL -- endpoint reachable but query failed: {resp.content[:100]}")
                 all_ok = False
         except Exception as exc:
-            click.echo(f"  {name}: UNREACHABLE -- {exc}")
+            click.echo(f"  {name}: FAIL -- {exc}")
             all_ok = False
 
     click.echo(f"\nAtlas (Claude): always available (this session)")
 
     if not all_ok:
-        click.echo("\nSome surgeons unreachable. Check config with '3s init'.")
+        click.echo("\nSome surgeons unreachable. Run '3s init' to reconfigure.")
         ctx.exit(1)
     else:
         click.echo("\nAll surgeons operational.")
@@ -152,6 +243,12 @@ def cross_exam(ctx: click.Context, topic: str) -> None:
 
     click.echo(f"Cross-examining: {topic}\n")
     result = team.cross_examine(topic)
+
+    # Surface degradation warnings
+    for warning in result.warnings:
+        click.echo(f"  [WARNING] {warning}", err=True)
+    if result.warnings:
+        click.echo(f"  Proceeding with {result.surgeon_count}/2 external surgeons.\n", err=True)
 
     if result.cardiologist_report:
         click.echo("--- Cardiologist ---")
@@ -200,6 +297,10 @@ def consult(ctx: click.Context, topic: str) -> None:
 
     click.echo(f"Consulting on: {topic}\n")
     result = team.consult(topic)
+
+    # Surface degradation warnings
+    for warning in result.warnings:
+        click.echo(f"  [WARNING] {warning}", err=True)
 
     if result.cardiologist_report:
         click.echo("--- Cardiologist ---")

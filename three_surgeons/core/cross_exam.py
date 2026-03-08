@@ -57,6 +57,17 @@ class CrossExamResult:
     synthesis: Optional[str] = None
     total_cost: float = 0.0
     total_latency_ms: float = 0.0
+    warnings: list = field(default_factory=list)
+
+    @property
+    def surgeon_count(self) -> int:
+        """Number of surgeons that contributed (excluding Atlas)."""
+        count = 0
+        if self.cardiologist_report:
+            count += 1
+        if self.neurologist_report:
+            count += 1
+        return count
 
 
 @dataclass
@@ -198,6 +209,12 @@ class SurgeryTeam:
             result.total_latency_ms += neuro_resp.latency_ms
             self._track_cost("neurologist", neuro_resp.cost_usd, "consult")
 
+        # Degradation warnings
+        if cardio_resp is None:
+            result.warnings.append("Cardiologist (remote LLM) unreachable — consulting with neurologist only.")
+        if neuro_resp is None:
+            result.warnings.append("Neurologist (local LLM) unreachable — consulting with cardiologist only.")
+
         # Log to evidence store
         self._log_cross_exam(result)
 
@@ -244,6 +261,20 @@ class SurgeryTeam:
             result.total_cost += neuro_initial.cost_usd
             result.total_latency_ms += neuro_initial.latency_ms
             self._track_cost("neurologist", neuro_initial.cost_usd, "cross_examine_p1")
+
+        # ── Degradation warnings ──────────────────────────────────────
+        if cardio_initial is None:
+            msg = "Cardiologist (remote LLM) unreachable — proceeding without. Run '3s probe' for details."
+            result.warnings.append(msg)
+            logger.warning(msg)
+        if neuro_initial is None:
+            msg = "Neurologist (local LLM) unreachable — proceeding without. Run '3s probe' for details."
+            result.warnings.append(msg)
+            logger.warning(msg)
+        if cardio_initial is None and neuro_initial is None:
+            msg = "Both surgeons unreachable — cross-examination has no external input."
+            result.warnings.append(msg)
+            logger.error(msg)
 
         # ── Phase 2: Cross-review ────────────────────────────────────
         # Each surgeon reviews the other's analysis

@@ -12,6 +12,46 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+import httpx
+
+
+# Known local LLM backends: (provider_name, default_port, models_endpoint_path)
+LOCAL_BACKENDS = [
+    ("ollama", 11434, "/v1/models"),
+    ("mlx", 5044, "/v1/models"),
+    ("vllm", 8000, "/v1/models"),
+    ("lmstudio", 1234, "/v1/models"),
+]
+
+
+def detect_local_backend(timeout_s: float = 2.0) -> list[dict]:
+    """Probe common local LLM ports and return detected backends.
+
+    Returns a list of dicts: [{provider, port, endpoint, models}] for each
+    backend that responds to /v1/models with valid JSON.
+    Does NOT assume what's on a port -- validates via /v1/models response.
+    """
+    detected = []
+    for provider, port, models_path in LOCAL_BACKENDS:
+        url = f"http://127.0.0.1:{port}{models_path}"
+        try:
+            resp = httpx.get(url, timeout=timeout_s)
+            if resp.status_code == 200:
+                data = resp.json()
+                models = []
+                # OpenAI-compatible format: {"data": [{"id": "model-name"}, ...]}
+                if isinstance(data, dict) and "data" in data:
+                    models = [m.get("id", "") for m in data["data"] if isinstance(m, dict)]
+                detected.append({
+                    "provider": provider,
+                    "port": port,
+                    "endpoint": f"http://127.0.0.1:{port}/v1",
+                    "models": models,
+                })
+        except (httpx.ConnectError, httpx.TimeoutException, Exception):
+            continue
+    return detected
+
 
 @dataclass
 class SurgeonConfig:

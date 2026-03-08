@@ -95,6 +95,7 @@ These signals map to required skills. When ANY signal is present, invoke the cor
 
 | Situation | Skill to Invoke | Why |
 |-----------|-----------------|-----|
+| First run, surgeons not configured | **setup-team** | Head surgeon guides team assembly |
 | Session start, after infra changes | **probe** | Verify all surgeons are reachable |
 | Validating a claim or assumption | **consensus** | Quick confidence-weighted vote |
 | Before critical operations | **sentinel** | Scan for complexity risks |
@@ -138,9 +139,13 @@ Every 10 gates: invariance-health retrospective (metacognition)
 
 This chain integrates with superpowers' process invariance. 3-Surgeons adds epistemological invariance (truth calibration) on top of superpowers' workflow discipline.
 
+## First-Run Setup
+
+If the surgeons aren't configured yet, invoke the **setup-team** skill. It guides the user through assembling their team conversationally — detecting local backends, configuring API keys securely, and verifying connectivity. Low pressure, practical, gets the team running in under a minute.
+
 ## Configuration
 
-Config lives in `~/.3surgeons/config.yaml` or `.3surgeons.yaml` in the project root. Run `3s init` for interactive setup. See `config/3surgeons.example.yaml` for the full schema.
+Config lives in `~/.3surgeons/config.yaml` or `.3surgeons.yaml` in the project root. Run `3s init` for interactive setup, or use the **setup-team** skill for a guided experience. See `config/3surgeons.example.yaml` for the full schema.
 
 Key settings:
 - `surgeons.cardiologist` -- OpenAI endpoint, model, API key env var

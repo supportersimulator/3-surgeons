@@ -124,7 +124,7 @@ class LLMProvider:
         self.endpoint: str = config.endpoint.rstrip("/")
         self.model: str = config.model
         self._api_key: Optional[str] = config.get_api_key()
-        self._is_local: bool = config.provider in ("ollama", "mlx", "local")
+        self._is_local: bool = config.provider in ("ollama", "mlx", "local", "vllm", "lmstudio")
         self._adapter = query_adapter
 
     def query(
