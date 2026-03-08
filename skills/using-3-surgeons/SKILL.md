@@ -147,10 +147,12 @@ If the surgeons aren't configured yet, invoke the **setup-team** skill. It guide
 
 Config lives in `~/.3surgeons/config.yaml` or `.3surgeons.yaml` in the project root. Run `3s init` for interactive setup, or use the **setup-team** skill for a guided experience. See `config/3surgeons.example.yaml` for the full schema.
 
+Config merges across tiers: defaults → `~/.3surgeons/config.yaml` → `.3surgeons.yaml`. Each layer only overrides what it explicitly sets — unset fields inherit from the layer below. This means a project config only needs to specify what's different from your user-level config.
+
 Key settings:
-- `surgeons.cardiologist` -- OpenAI endpoint, model, API key env var
-- `surgeons.neurologist` -- Ollama/MLX endpoint, model
-- `budgets.daily_external_usd` -- daily spend cap (default $5)
+- `surgeons.cardiologist` -- endpoint, model, API key env var, optional `fallbacks` list
+- `surgeons.neurologist` -- endpoint, model, optional `fallbacks` list
+- `budgets.daily_external_usd` -- daily spend cap (default $5, enforced before external calls)
 - `budgets.autonomous_ab_usd` -- per-test cost cap (default $2)
 
 ## Evidence Store
@@ -164,10 +166,15 @@ Any endpoint implementing the OpenAI `/v1/chat/completions` API works with zero 
 | Provider | Endpoint | Models | API Key Env | Cost |
 |----------|----------|--------|-------------|------|
 | **OpenAI** | `https://api.openai.com/v1` | gpt-4.1-mini, gpt-4.1, o3 | `OPENAI_API_KEY` | $0.10-8.00/1M |
+| **Anthropic** | `https://api.anthropic.com/v1` | claude-sonnet-4, claude-haiku-4.5 | `ANTHROPIC_API_KEY` | $0.80-15.00/1M |
+| **Google** | `https://generativelanguage.googleapis.com/v1beta/openai` | gemini-2.5-pro, gemini-2.5-flash | `GOOGLE_API_KEY` | $0.15-10.00/1M |
 | **DeepSeek** | `https://api.deepseek.com/v1` | deepseek-chat, deepseek-reasoner | `DEEPSEEK_API_KEY` | $0.27-2.19/1M |
 | **Groq** | `https://api.groq.com/openai/v1` | llama-3.3-70b, llama-3.1-8b | `GROQ_API_KEY` | $0.05-0.79/1M |
 | **xAI (Grok)** | `https://api.x.ai/v1` | grok-2, grok-2-mini | `XAI_API_KEY` | $0.30-10.00/1M |
 | **Mistral** | `https://api.mistral.ai/v1` | mistral-large, mistral-small | `MISTRAL_API_KEY` | $0.10-6.00/1M |
+| **Cohere** | `https://api.cohere.com/v2` | command-r-plus, command-r | `COHERE_API_KEY` | $0.15-10.00/1M |
+| **Perplexity** | `https://api.perplexity.ai` | sonar-pro, sonar | `PERPLEXITY_API_KEY` | $1.00-15.00/1M |
+| **Together** | `https://api.together.xyz/v1` | Llama-3.3-70B, Llama-3.1-8B | `TOGETHER_API_KEY` | $0.18-0.88/1M |
 | **Ollama** | `http://localhost:11434/v1` | Any pulled model | none | $0 (local) |
 | **LM Studio** | `http://localhost:1234/v1` | Any loaded model | none | $0 (local) |
 | **vLLM** | `http://localhost:8000/v1` | Any served model | none | $0 (local) |
@@ -199,4 +206,18 @@ cardiologist:
   endpoint: https://api.x.ai/v1
   model: grok-2
   api_key_env: XAI_API_KEY
+```
+
+**Cardiologist with automatic failover** (try OpenAI, fall back to DeepSeek):
+```yaml
+cardiologist:
+  provider: openai
+  endpoint: https://api.openai.com/v1
+  model: gpt-4.1-mini
+  api_key_env: OPENAI_API_KEY
+  fallbacks:
+    - provider: deepseek
+      endpoint: https://api.deepseek.com/v1
+      model: deepseek-chat
+      api_key_env: DEEPSEEK_API_KEY
 ```

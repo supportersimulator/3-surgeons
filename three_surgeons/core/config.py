@@ -62,6 +62,7 @@ class SurgeonConfig:
     model: str = ""
     api_key_env: str = ""
     role: str = ""
+    fallbacks: List[Dict[str, str]] = field(default_factory=list)
 
     def get_api_key(self) -> Optional[str]:
         """Read API key from the environment variable.
@@ -72,6 +73,19 @@ class SurgeonConfig:
         if value is None or len(value) < 6:
             return None
         return value
+
+    def get_fallback_configs(self) -> List["SurgeonConfig"]:
+        """Convert fallback dicts from YAML into SurgeonConfig objects."""
+        configs = []
+        for fb in self.fallbacks:
+            if isinstance(fb, dict):
+                configs.append(SurgeonConfig(
+                    provider=fb.get("provider", "openai"),
+                    endpoint=fb.get("endpoint", ""),
+                    model=fb.get("model", ""),
+                    api_key_env=fb.get("api_key_env", ""),
+                ))
+        return configs
 
 
 @dataclass
@@ -165,35 +179,59 @@ class Config:
 
     @classmethod
     def discover(cls, project_dir: Optional[Path] = None) -> Config:
-        """Discover configuration using a priority order.
+        """Discover and merge configuration across tiers.
 
-        Search order (first found wins):
-        1. project_dir/.3surgeons.yaml  (project-level)
-        2. ~/.3surgeons/config.yaml     (user-level)
-        3. built-in defaults
+        Layers (each overrides the previous):
+        1. Built-in defaults (base)
+        2. ~/.3surgeons/config.yaml (user-level overrides)
+        3. project_dir/.3surgeons.yaml (project-level overrides)
+
+        Project config inherits from user config, which inherits from
+        defaults. Only the fields explicitly set in a tier override the
+        tier below -- unset fields are preserved from the lower tier.
         """
-        # 1. Project-level config
+        # Start with defaults
+        cfg = cls()
+
+        # Layer user-level config
+        home_config = Path.home() / ".3surgeons" / "config.yaml"
+        if home_config.is_file():
+            try:
+                raw = yaml.safe_load(home_config.read_text()) or {}
+            except (yaml.YAMLError, OSError):
+                raw = {}
+            cfg = cls._merge_into(cfg, raw)
+
+        # Layer project-level config on top
         if project_dir is not None:
             project_config = project_dir / ".3surgeons.yaml"
             if project_config.is_file():
-                return cls.from_yaml(project_config)
+                try:
+                    raw = yaml.safe_load(project_config.read_text()) or {}
+                except (yaml.YAMLError, OSError):
+                    raw = {}
+                cfg = cls._merge_into(cfg, raw)
 
-        # 2. User-level config in home directory
-        home_config = Path.home() / ".3surgeons" / "config.yaml"
-        if home_config.is_file():
-            return cls.from_yaml(home_config)
-
-        # 3. Defaults
-        return cls()
+        return cfg
 
     @classmethod
     def _from_dict(cls, raw: Dict[str, Any]) -> Config:
-        """Parse a raw dict (from YAML) into a Config.
+        """Parse a raw dict (from YAML) into a Config from defaults.
 
         Only sets fields that exist in the corresponding dataclass,
         ignoring unknown keys gracefully.
         """
-        cfg = cls()
+        return cls._merge_into(cls(), raw)
+
+    @classmethod
+    def _merge_into(cls, cfg: Config, raw: Dict[str, Any]) -> Config:
+        """Merge a raw dict into an existing Config, overriding only set fields.
+
+        This enables layered config: defaults → user → project, where each
+        layer only overrides what it explicitly sets.
+        """
+        if not isinstance(raw, dict):
+            return cfg
 
         surgeons = raw.get("surgeons", {})
         if isinstance(surgeons, dict):

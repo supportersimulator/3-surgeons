@@ -276,8 +276,8 @@ def test_preset_local_only_loads():
     preset = Path(__file__).parent.parent / "config" / "presets" / "local-only.yaml"
     assert preset.exists(), "local-only.yaml preset missing"
     cfg = Config.from_yaml(preset)
-    assert cfg.cardiologist.provider == "ollama"
-    assert cfg.neurologist.provider == "ollama"
+    assert cfg.cardiologist.provider == "local"
+    assert cfg.neurologist.provider == "local"
 
 
 def test_preset_hybrid_loads():

@@ -126,10 +126,15 @@ Once the team is verified:
 | Provider | Env Var | Default Model | Cost |
 |----------|---------|---------------|------|
 | OpenAI | `OPENAI_API_KEY` | gpt-4.1-mini | ~$0.40/1M |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-sonnet-4-20250514 | ~$3.00/1M |
+| Google | `GOOGLE_API_KEY` | gemini-2.5-flash | ~$0.15/1M |
 | DeepSeek | `DEEPSEEK_API_KEY` | deepseek-chat | ~$0.27/1M |
 | Groq | `GROQ_API_KEY` | llama-3.3-70b | ~$0.59/1M |
 | xAI (Grok) | `XAI_API_KEY` | grok-2 | ~$2.00/1M |
 | Mistral | `MISTRAL_API_KEY` | mistral-large | ~$2.00/1M |
+| Cohere | `COHERE_API_KEY` | command-r | ~$0.15/1M |
+| Perplexity | `PERPLEXITY_API_KEY` | sonar | ~$1.00/1M |
+| Together | `TOGETHER_API_KEY` | Llama-3.3-70B | ~$0.88/1M |
 | Ollama | none | any pulled model | $0 |
 | LM Studio | none | any loaded model | $0 |
 | MLX | none | any served model | $0 |

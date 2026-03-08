@@ -6,14 +6,17 @@ querying, cost estimation, and error handling.
 """
 from __future__ import annotations
 
+import logging
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional, Protocol, Tuple, runtime_checkable
+from typing import Callable, Dict, List, Optional, Protocol, Tuple, runtime_checkable
 
 import httpx
 
 from three_surgeons.core.config import SurgeonConfig
+
+logger = logging.getLogger(__name__)
 
 # Pricing per 1M tokens: (input_usd, output_usd)
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
@@ -42,6 +45,12 @@ PRICING: Dict[str, Tuple[float, float]] = {
     "gpt-4.1-nano": (0.10, 0.40),
     "o3": (2.00, 8.00),
     "o4-mini": (1.10, 4.40),
+    # Anthropic
+    "claude-sonnet-4-20250514": (3.00, 15.00),
+    "claude-haiku-4-5-20251001": (0.80, 4.00),
+    # Google
+    "gemini-2.5-pro": (1.25, 10.00),
+    "gemini-2.5-flash": (0.15, 0.60),
     # DeepSeek
     "deepseek-chat": (0.27, 1.10),
     "deepseek-reasoner": (0.55, 2.19),
@@ -54,6 +63,15 @@ PRICING: Dict[str, Tuple[float, float]] = {
     # xAI (Grok)
     "grok-2": (2.00, 10.00),
     "grok-2-mini": (0.30, 0.50),
+    # Cohere
+    "command-r-plus": (2.50, 10.00),
+    "command-r": (0.15, 0.60),
+    # Perplexity
+    "sonar-pro": (3.00, 15.00),
+    "sonar": (1.00, 1.00),
+    # Together
+    "meta-llama/Llama-3.3-70B-Instruct-Turbo": (0.88, 0.88),
+    "meta-llama/Llama-3.1-8B-Instruct-Turbo": (0.18, 0.18),
 }
 
 
@@ -111,21 +129,30 @@ class LLMProvider:
     Works with OpenAI, Ollama, local MLX servers, or any endpoint that
     implements the /v1/chat/completions interface.
 
-    Optional query_adapter: when provided, all LLM calls route through the
-    adapter instead of raw HTTP. This enables priority queue scheduling,
-    rate limiting, or any custom routing without changing callers.
+    Features:
+    - Automatic retry with configurable fallback providers
+    - Budget enforcement (daily spend cap)
+    - Optional query_adapter for custom routing (priority queues, etc.)
     """
 
     def __init__(
         self,
         config: SurgeonConfig,
         query_adapter: Optional[Callable[..., "LLMResponse"]] = None,
+        fallbacks: Optional[List[SurgeonConfig]] = None,
+        max_retries: int = 1,
+        budget_tracker: Optional[Callable[[], float]] = None,
+        budget_limit: float = 0.0,
     ) -> None:
         self.endpoint: str = config.endpoint.rstrip("/")
         self.model: str = config.model
         self._api_key: Optional[str] = config.get_api_key()
         self._is_local: bool = config.provider in ("ollama", "mlx", "local", "vllm", "lmstudio")
         self._adapter = query_adapter
+        self._fallbacks: List[SurgeonConfig] = fallbacks or []
+        self._max_retries: int = max_retries
+        self._budget_tracker = budget_tracker
+        self._budget_limit = budget_limit
 
     def query(
         self,
@@ -135,25 +162,82 @@ class LLMProvider:
         temperature: float = 0.7,
         timeout_s: float = 300.0,
     ) -> LLMResponse:
-        """Send a chat completion request and return a structured response.
+        """Send a chat completion request with retry and fallback support.
 
-        POSTs to {endpoint}/chat/completions with the OpenAI-compatible
-        messages format. Handles connection errors, HTTP errors, and
-        unexpected exceptions gracefully.
+        Tries the primary endpoint first. On failure, retries up to
+        max_retries times, then falls through to each fallback provider
+        in order. Returns the first successful response, or the last
+        error if all attempts fail.
 
-        For local models, <think> reasoning blocks are stripped from the
-        response so callers always get clean content.
+        Budget enforcement: if budget_tracker and budget_limit are set,
+        checks daily spend before external calls. Over-budget calls
+        return an error without making the request.
         """
         if self._adapter is not None:
             return self._query_via_adapter(system, prompt, max_tokens, temperature, timeout_s)
 
-        url = f"{self.endpoint}/chat/completions"
+        # Budget check for non-local providers
+        if not self._is_local and self._budget_limit > 0 and self._budget_tracker:
+            spent = self._budget_tracker()
+            if spent >= self._budget_limit:
+                return LLMResponse.error(
+                    f"Daily budget exhausted (${spent:.2f} / ${self._budget_limit:.2f}). "
+                    "Skipping external call.",
+                    model=self.model,
+                )
+
+        # Try primary endpoint with retries
+        last_error: Optional[LLMResponse] = None
+        for attempt in range(1 + self._max_retries):
+            resp = self._single_query(
+                self.endpoint, self.model, self._api_key, self._is_local,
+                system, prompt, max_tokens, temperature, timeout_s,
+            )
+            if resp.ok:
+                return resp
+            last_error = resp
+            if attempt < self._max_retries:
+                logger.warning(
+                    "Primary LLM failed (attempt %d/%d, model=%s): %s",
+                    attempt + 1, 1 + self._max_retries, self.model, resp.content,
+                )
+
+        # Try fallback providers
+        for fb_config in self._fallbacks:
+            fb_is_local = fb_config.provider in ("ollama", "mlx", "local", "vllm", "lmstudio")
+            fb_key = fb_config.get_api_key()
+            fb_endpoint = fb_config.endpoint.rstrip("/")
+            logger.info("Falling back to %s (%s)", fb_config.provider, fb_config.model)
+            resp = self._single_query(
+                fb_endpoint, fb_config.model, fb_key, fb_is_local,
+                system, prompt, max_tokens, temperature, timeout_s,
+            )
+            if resp.ok:
+                return resp
+            last_error = resp
+
+        return last_error or LLMResponse.error("All providers failed", model=self.model)
+
+    @staticmethod
+    def _single_query(
+        endpoint: str,
+        model: str,
+        api_key: Optional[str],
+        is_local: bool,
+        system: str,
+        prompt: str,
+        max_tokens: int,
+        temperature: float,
+        timeout_s: float,
+    ) -> LLMResponse:
+        """Execute a single HTTP request to an OpenAI-compatible endpoint."""
+        url = f"{endpoint}/chat/completions"
         headers: Dict[str, str] = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
 
         payload = {
-            "model": self.model,
+            "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
@@ -171,21 +255,19 @@ class LLMProvider:
 
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
-            # Strip <think> reasoning blocks from local models (Qwen3, etc.)
-            if self._is_local:
+            if is_local:
                 content = strip_think_tags(content)
 
-            # Extract token usage if available
             usage = data.get("usage", {})
             tokens_in = usage.get("prompt_tokens", 0)
             tokens_out = usage.get("completion_tokens", 0)
-            cost = estimate_cost(self.model, tokens_in, tokens_out)
+            cost = estimate_cost(model, tokens_in, tokens_out)
 
             return LLMResponse(
                 ok=True,
                 content=content,
                 latency_ms=latency_ms,
-                model=self.model,
+                model=model,
                 cost_usd=cost,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
@@ -197,7 +279,7 @@ class LLMProvider:
                 ok=False,
                 content=f"Connection error: {exc}",
                 latency_ms=latency_ms,
-                model=self.model,
+                model=model,
             )
 
         except httpx.HTTPStatusError as exc:
@@ -206,7 +288,7 @@ class LLMProvider:
                 ok=False,
                 content=f"HTTP {exc.response.status_code}: {exc.response.text}",
                 latency_ms=latency_ms,
-                model=self.model,
+                model=model,
             )
 
         except Exception as exc:
@@ -215,7 +297,7 @@ class LLMProvider:
                 ok=False,
                 content=f"Unexpected error: {exc}",
                 latency_ms=latency_ms,
-                model=self.model,
+                model=model,
             )
 
     def _query_via_adapter(
@@ -260,6 +342,18 @@ class LLMProvider:
         )
 
 
-def create_provider(config: SurgeonConfig) -> LLMProvider:
+def create_provider(
+    config: SurgeonConfig,
+    query_adapter: Optional[Callable[..., "LLMResponse"]] = None,
+    fallbacks: Optional[List[SurgeonConfig]] = None,
+    budget_tracker: Optional[Callable[[], float]] = None,
+    budget_limit: float = 0.0,
+) -> LLMProvider:
     """Factory function to create an LLMProvider from a SurgeonConfig."""
-    return LLMProvider(config)
+    return LLMProvider(
+        config,
+        query_adapter=query_adapter,
+        fallbacks=fallbacks,
+        budget_tracker=budget_tracker,
+        budget_limit=budget_limit,
+    )
