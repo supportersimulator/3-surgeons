@@ -39,12 +39,20 @@ All 3-Surgeons operations are available through two interfaces:
 
 ```bash
 3s probe                        # Health check all surgeons
-3s cross-exam "topic"           # Full cross-examination
+3s cross-exam "topic"           # Full cross-examination (uses config default mode)
+3s cross-exam "topic" --mode iterative  # Cross-exam with explicit review depth
 3s consult "topic"              # Quick parallel query
 3s consensus "claim"            # Confidence-weighted vote
 3s sentinel "content"           # Complexity vector scan
 3s gains-gate                   # Infrastructure health gate
 3s ab-propose PARAM A B "hyp"   # Propose A/B test
+3s mode                         # Show current review depth + auto-depth setting
+3s mode continuous              # Set default review depth
+3s mode iterative --duration 7d # Set mode with expiry (session|7d|30d|permanent)
+3s review-weights               # Show learned mode weights
+3s review-weights show          # Same as above
+3s review-weights export -o weights.json  # Export outcomes for sharing
+3s review-weights import weights.json     # Import outcomes from another machine
 ```
 
 ### MCP Tools
@@ -88,13 +96,15 @@ These signals map to required skills. When ANY signal is present, invoke the cor
 | High confidence + low evidence | **counter-position** | HARD-GATE |
 | Single surgeon dominates consensus | **counter-position** | HARD-GATE |
 | Sentinel risk >= high | **cross-examination** + **counter-position** | Escalation |
+| Cross-exam starting (any trigger) | **review-loop** | HARD-GATE |
 | Every 10 gate invocations | **invariance-health** | Automatic |
 | Gate override rate >30% | **invariance-health** | Automatic |
 
-### Existing Skills (unchanged)
+### Existing Skills
 
 | Situation | Skill to Invoke | Why |
 |-----------|-----------------|-----|
+| Cross-exam about to start | **review-loop** | Selects review depth (single/iterative/continuous) based on risk |
 | First run, surgeons not configured | **setup-team** | Head surgeon guides team assembly |
 | Session start, after infra changes | **probe** | Verify all surgeons are reachable |
 | Validating a claim or assumption | **consensus** | Quick confidence-weighted vote |
@@ -127,17 +137,96 @@ The full workflow when an architectural signal fires:
 ```
 Signal detected
   → architectural-gate (risk stratification → Light/Standard/Full)
-    → [brainstorming] (superpowers skill)
-      → [writing-plans] (superpowers skill)
-        → pre-implementation-review (HARD-GATE before coding)
-          → [executing-plans] (superpowers skill)
-            → post-implementation-verification (HARD-GATE before "done")
-              → completion
+    → review-loop (selects depth: single/iterative/continuous)
+      → [brainstorming] (superpowers skill)
+        → [writing-plans] (superpowers skill)
+          → pre-implementation-review (HARD-GATE before coding)
+            → [executing-plans] (superpowers skill)
+              → post-implementation-verification (HARD-GATE before "done")
+                → completion
 
 Every 10 gates: invariance-health retrospective (metacognition)
 ```
 
 This chain integrates with superpowers' process invariance. 3-Surgeons adds epistemological invariance (truth calibration) on top of superpowers' workflow discipline.
+
+## Review Loop Modes
+
+Cross-examinations support three review depth modes that control how many iteration passes the surgeons make. The **review-loop** skill (see `skills/review-loop/SKILL.md`) fires as a HARD-GATE before every cross-exam to select the appropriate depth.
+
+### Modes
+
+| Mode | Max Iterations | When to Use |
+|------|---------------|-------------|
+| **single** | 1 | Config changes, docs, small fixes, <=2 files changed |
+| **iterative** | up to 3 | Multi-file changes, new features, refactors (3-10 files) |
+| **continuous** | up to 5 | Security, schema, API, architecture changes, >10 files |
+
+### Mode Resolution Order
+
+The mode used for a cross-exam is determined by (highest priority first):
+
+1. **CLI `--mode` flag** -- `3s cross-exam "topic" --mode continuous`
+2. **Config default** -- `review.depth` in `.3surgeons.yaml` or `~/.3surgeons/config.yaml`
+3. **Adaptive weights** -- when `auto_review_depth: auto`, learned weights from past outcomes influence mode selection
+
+### Risk Stratification Reference
+
+When the review-loop skill auto-selects mode, it evaluates these dimensions. **The highest-risk dimension wins:**
+
+| Dimension | single | iterative | continuous |
+|-----------|--------|-----------|------------|
+| Files changed | 1-2 | 3-10 | >10 |
+| Reversibility | Fully reversible | Partially reversible | Hard to reverse |
+| Security exposure | None | Internal | External/auth |
+| Data impact | Read-only | Schema-preserving | Schema-changing |
+| External coupling | None | Internal APIs | Public APIs |
+
+### Exit Conditions
+
+- **Consensus >= 0.7** on "all issues addressed" -- exits the loop early
+- **Max iterations reached** without consensus -- escalates to human with unresolved summary
+- **User override** at any point -- respected immediately
+
+### Conversational Mode Switching
+
+Users can set review depth through natural language. The agent maps intent to mode:
+
+| User Says | Maps To |
+|-----------|---------|
+| "quick review", "just a glance" | single |
+| "thorough review", "check carefully" | iterative |
+| "loop until satisfied", "full depth", "keep going" | continuous |
+| "3-surgeons full" | continuous |
+
+### Managing Modes via CLI
+
+```bash
+# Show current mode and auto-depth setting
+3s mode
+
+# Set default depth (permanent unless --duration specified)
+3s mode continuous
+3s mode iterative --duration session   # Reverts after session ends
+3s mode single --duration 7d           # Reverts after 7 days
+
+# View learned weights from past review outcomes
+3s review-weights
+
+# Share weights across machines
+3s review-weights export -o weights.json
+3s review-weights import weights.json
+```
+
+### Auto-Depth Behavior
+
+Controlled by the `auto_review_depth` config setting:
+
+| Setting | Behavior |
+|---------|----------|
+| **off** | Always uses config default or CLI flag. No adaptation. |
+| **suggest** | Recommends a mode with reasoning, waits for confirmation before proceeding. |
+| **auto** | Applies learned weights from past outcomes. User can override anytime. |
 
 ## First-Run Setup
 
