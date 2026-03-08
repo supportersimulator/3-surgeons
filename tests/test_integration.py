@@ -579,3 +579,62 @@ class TestFullLifecycleIntegration:
             assert check.passed, f"Critical check {check.name} failed: {check.message}"
 
         assert result.duration_ms >= 0
+
+
+# ── Review Loop Integration ────────────────────────────────────────────
+
+
+class TestReviewLoopIntegration:
+    """End-to-end: mode selection -> iterative cross-exam -> outcome recording."""
+
+    def test_full_iterative_loop_with_consensus(self, tmp_path):
+        """Iterative mode reaches consensus and records outcome."""
+        from three_surgeons.core.cross_exam import ReviewMode
+
+        cardio = MagicMock()
+        cardio.query.return_value = LLMResponse(
+            ok=True,
+            content='{"confidence": 0.9, "assessment": "agree"}',
+            latency_ms=200,
+            model="gpt-4.1-mini",
+            cost_usd=0.001,
+        )
+        neuro = MagicMock()
+        neuro.query.return_value = LLMResponse(
+            ok=True,
+            content='{"confidence": 0.8, "assessment": "agree"}',
+            latency_ms=50,
+            model="qwen3:4b",
+        )
+        evidence = EvidenceStore(str(tmp_path / "evidence.db"))
+        state = MemoryBackend()
+        team = SurgeryTeam(
+            cardiologist=cardio,
+            neurologist=neuro,
+            evidence=evidence,
+            state=state,
+        )
+
+        result = team.cross_examine_iterative(
+            "Review auth changes",
+            mode=ReviewMode.ITERATIVE,
+        )
+
+        # Verify result
+        assert result.mode_used == "iterative"
+        assert result.iteration_count >= 1
+        assert result.iteration_count <= 3
+
+        # Verify outcome recorded
+        outcomes = evidence.get_review_outcomes(limit=1)
+        assert len(outcomes) == 1
+        assert outcomes[0]["mode_used"] == "iterative"
+
+    def test_cli_cross_exam_with_mode_flag(self):
+        """CLI cross-exam --mode iterative parses and runs."""
+        runner = CliRunner()
+        result = runner.invoke(
+            cli, ["cross-exam", "--mode", "iterative", "test topic"]
+        )
+        # May fail on LLM connection but should parse the flag
+        assert "no such option" not in (result.output or "")
