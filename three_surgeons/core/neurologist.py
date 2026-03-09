@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from three_surgeons.core.cross_exam import _read_file_context
 from three_surgeons.core.models import LLMProvider, LLMResponse
 
 
@@ -173,19 +174,10 @@ def neurologist_challenge(
     # Gather context
     context_parts: List[str] = []
 
-    # File context
-    if file_paths:
-        file_contents: List[str] = []
-        for fp in file_paths:
-            try:
-                with open(fp, "r") as f:
-                    content = f.read()
-                file_contents.append(f"--- {fp} ---\n{content}")
-            except (OSError, IOError):
-                continue
-        if file_contents:
-            context_parts.append("Relevant source files:")
-            context_parts.extend(file_contents)
+    # File context — policy-gated (same as cross_exam / cardio)
+    file_context = _read_file_context(file_paths)
+    if file_context:
+        context_parts.append(file_context)
 
     if evidence_store is not None:
         try:

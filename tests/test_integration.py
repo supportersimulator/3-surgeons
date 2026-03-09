@@ -6,6 +6,7 @@ feeds into gates, and corrigibility blocks dangerous actions.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -264,16 +265,21 @@ class TestCLIIntegration:
 class TestConfigDiscoveryIntegration:
     """Verify the config discovery chain works end-to-end."""
 
-    def test_defaults_when_no_config_files(self, tmp_path):
+    def test_defaults_when_no_config_files(self, tmp_path, monkeypatch):
         """Config.discover with a dir containing no config returns defaults."""
+        # Isolate from real ~/.3surgeons/config.yaml on the host machine
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
         config = Config.discover(project_dir=tmp_path)
         assert config.cardiologist.model == "gpt-4.1-mini"
         assert config.neurologist.model == "qwen3:4b"
         assert config.budgets.daily_external_usd == 5.0
 
-    def test_project_config_overrides_defaults(self, tmp_path):
+    def test_project_config_overrides_defaults(self, tmp_path, monkeypatch):
         """A .3surgeons.yaml in project dir should override defaults."""
         import yaml
+
+        # Isolate from real ~/.3surgeons/config.yaml on the host machine
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         project_config = tmp_path / ".3surgeons.yaml"
         project_config.write_text(
@@ -630,11 +636,27 @@ class TestReviewLoopIntegration:
         assert len(outcomes) == 1
         assert outcomes[0]["mode_used"] == "iterative"
 
-    def test_cli_cross_exam_with_mode_flag(self):
+    def test_cli_cross_exam_with_mode_flag(self, monkeypatch, tmp_path):
         """CLI cross-exam --mode iterative parses and runs."""
-        runner = CliRunner()
-        result = runner.invoke(
-            cli, ["cross-exam", "--mode", "iterative", "test topic"]
+        from unittest.mock import patch
+
+        from three_surgeons.core.models import LLMResponse
+
+        # Isolate config from host machine
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        mock_resp = LLMResponse(
+            ok=True, content="Mock analysis", latency_ms=10, model="mock"
         )
-        # May fail on LLM connection but should parse the flag
+
+        runner = CliRunner()
+        with patch("three_surgeons.cli.main.LLMProvider") as mock_cls, \
+             patch("three_surgeons.cli.main._make_neuro") as mock_neuro:
+            mock_cls.return_value.query.return_value = mock_resp
+            mock_neuro.return_value.query.return_value = mock_resp
+            result = runner.invoke(
+                cli, ["cross-exam", "--mode", "iterative", "test topic"]
+            )
+        # Flag parsed without error and command ran
+        assert result.exit_code == 0, result.output
         assert "no such option" not in (result.output or "")

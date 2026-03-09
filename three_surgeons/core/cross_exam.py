@@ -10,29 +10,41 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import List, Optional, Protocol
 
 from three_surgeons.core.evidence import EvidenceStore
+from three_surgeons.core.file_access import AccessOutcome, FileAccessPolicy, read_files_with_budget, wrap_file_content
 from three_surgeons.core.state import StateBackend
 
 logger = logging.getLogger(__name__)
 
 
+def _get_file_policy() -> FileAccessPolicy:
+    """Build file access policy from env or cwd. No caching — env may change."""
+    env_dirs = os.environ.get("THREE_SURGEONS_BASE_DIRS", "")
+    if env_dirs:
+        base_dirs = [Path(d.strip()) for d in env_dirs.split(":") if d.strip()]
+    else:
+        base_dirs = [Path(os.getcwd())]
+    return FileAccessPolicy(base_dirs=base_dirs)
+
+
 def _read_file_context(file_paths: Optional[List[str]]) -> str:
-    """Read files and format as context string for LLM prompts."""
+    """Read validated, chunked files as context for LLM prompts."""
     if not file_paths:
         return ""
+    policy = _get_file_policy()
+    file_contents = read_files_with_budget(file_paths, policy)
+    if not file_contents:
+        return ""
     parts: List[str] = ["Relevant source files:"]
-    for fp in file_paths:
-        try:
-            with open(fp, "r") as f:
-                content = f.read()
-            parts.append(f"--- {fp} ---\n{content}")
-        except (OSError, IOError):
-            continue
-    return "\n".join(parts) if len(parts) > 1 else ""
+    for path, content in file_contents.items():
+        parts.append(wrap_file_content(path, content))
+    return "\n".join(parts)
 
 
 class LLMProviderLike(Protocol):

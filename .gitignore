@@ -31,3 +31,6 @@ config/secrets.*
 *.db-wal
 *.db-shm
 gpu.lock
+
+# Audit trail (local runtime data)
+.3s-audit/

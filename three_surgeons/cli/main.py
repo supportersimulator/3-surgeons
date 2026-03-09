@@ -61,16 +61,38 @@ def init(detect: bool) -> None:
     else:
         click.echo("  No local LLM backends detected.")
 
-    # Build preset menu dynamically
+    # Build preset menu dynamically based on what was detected
     click.echo("\nChoose a preset:")
-    click.echo("  1. Hybrid (Recommended) -- OpenAI + local LLM")
-    click.echo("  2. API-Only -- OpenAI + DeepSeek (no local LLM)")
-    click.echo("  3. Local-Only -- local LLM only ($0 cost)")
+    if backends:
+        detected_name = backends[0]["provider"].upper()
+        click.echo(f"  1. Hybrid (Recommended) -- OpenAI + {detected_name} (detected)")
+        if any(b["provider"] == "mlx" for b in backends):
+            click.echo("     ^ Uses your mlx_lm.server on port 5044")
+        elif any(b["provider"] == "ollama" for b in backends):
+            click.echo("     ^ Uses your Ollama server on port 11434")
+    else:
+        click.echo("  1. Hybrid -- OpenAI + local LLM (no local backend detected)")
+        click.echo("     Supported: mlx_lm.server | Ollama | LM Studio | vLLM")
+    click.echo("  2. API-Only -- OpenAI + DeepSeek (no local LLM needed)")
+    click.echo("     Requires: OPENAI_API_KEY + DEEPSEEK_API_KEY env vars")
+    click.echo("  3. Local-Only -- local LLM only ($0 cost, needs local server)")
     click.echo("  4. Custom -- configure manually")
-    preset = click.prompt("Selection", type=int, default=1)
+
+    # Suggest best default based on detection
+    if backends:
+        default_preset = 1
+    else:
+        click.echo("\n  No local LLM detected. Preset 2 (API-Only) may be easiest to start.")
+        default_preset = 2
+
+    preset = click.prompt("Selection", type=int, default=default_preset)
 
     presets_dir = Path(__file__).parent.parent.parent / "config" / "presets"
-    preset_map = {1: "hybrid.yaml", 2: "api-only.yaml", 3: "local-only.yaml"}
+    # Use MLX-specific preset if MLX was detected
+    hybrid_preset = "hybrid.yaml"
+    if backends and any(b["provider"] == "mlx" for b in backends):
+        hybrid_preset = "mlx-hybrid.yaml"
+    preset_map = {1: hybrid_preset, 2: "api-only.yaml", 3: "local-only.yaml"}
 
     config_dir = Path.home() / ".3surgeons"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -129,7 +151,7 @@ def init(detect: bool) -> None:
         click.echo(f"\nConfig written to {config_path}")
 
     click.echo("\nSecurity reminder: NEVER commit API keys. Use environment variables.")
-    click.echo("Run '3s probe' to verify connectivity.")
+    click.echo("Run '3s probe' to verify all surgeons are connected.")
     click.echo(
         "\nTip: If you're using a coding agent (Claude Code, Cursor, etc.), just ask it"
         "\n     to 'set up the surgery team' — it can detect your backends, help configure"
@@ -232,6 +254,115 @@ def probe(ctx: click.Context) -> None:
         ctx.exit(1)
     else:
         click.echo("\nAll surgeons operational.")
+
+
+# -- setup-check ------------------------------------------------------------
+
+
+@cli.command("setup-check")
+@click.pass_context
+def setup_check(ctx: click.Context) -> None:
+    """Non-interactive setup diagnostic for coding agents and CI.
+
+    Checks: config discovery, API keys, local backends, endpoint connectivity.
+    Returns JSON-like summary suitable for agent consumption.
+    """
+    import json as _json
+
+    from three_surgeons.core.config import detect_local_backend
+
+    config: Config = ctx.obj["config"]
+    results: dict = {"config_source": "defaults", "surgeons": {}, "local_backends": []}
+
+    # Config source
+    config_path = Path.home() / ".3surgeons" / "config.yaml"
+    project_path = Path.cwd() / ".3surgeons.yaml"
+    if project_path.is_file():
+        results["config_source"] = str(project_path)
+    elif config_path.is_file():
+        results["config_source"] = str(config_path)
+
+    # Local backend detection
+    backends = detect_local_backend(timeout_s=2.0)
+    results["local_backends"] = [
+        {"provider": b["provider"], "port": b["port"], "models": b["models"][:3]}
+        for b in backends
+    ]
+
+    # Check each surgeon
+    for name, surgeon_cfg in [
+        ("cardiologist", config.cardiologist),
+        ("neurologist", config.neurologist),
+    ]:
+        is_local = surgeon_cfg.provider in ("ollama", "mlx", "local", "vllm", "lmstudio")
+        info: dict = {
+            "provider": surgeon_cfg.provider,
+            "endpoint": surgeon_cfg.endpoint,
+            "model": surgeon_cfg.model,
+            "is_local": is_local,
+            "api_key_set": bool(surgeon_cfg.get_api_key()) if not is_local else True,
+            "api_key_env": surgeon_cfg.api_key_env if not is_local else "",
+            "reachable": False,
+            "ping_ok": False,
+        }
+
+        # Connectivity check
+        try:
+            import httpx
+            resp = httpx.get(f"{surgeon_cfg.endpoint.rstrip('/')}/models", timeout=3.0)
+            info["reachable"] = resp.status_code == 200
+        except Exception:
+            pass
+
+        # Ping check (only if reachable and key is available)
+        if info["reachable"] and (is_local or info["api_key_set"]):
+            try:
+                provider = LLMProvider(surgeon_cfg)
+                ping = provider.ping(timeout_s=10.0)
+                info["ping_ok"] = ping.ok
+                if ping.ok:
+                    info["ping_latency_ms"] = ping.latency_ms
+            except Exception:
+                pass
+
+        results["surgeons"][name] = info
+
+    # Summary
+    all_ok = all(s["ping_ok"] for s in results["surgeons"].values())
+    results["status"] = "operational" if all_ok else "degraded"
+
+    click.echo(_json.dumps(results, indent=2))
+
+    if not all_ok:
+        click.echo("\n--- Setup guidance ---", err=True)
+        for name, info in results["surgeons"].items():
+            if not info["ping_ok"]:
+                if not info["api_key_set"] and not info["is_local"]:
+                    click.echo(
+                        f"  {name}: Set {info['api_key_env']} env var "
+                        f"(provider: {info['provider']})",
+                        err=True,
+                    )
+                elif not info["reachable"]:
+                    click.echo(
+                        f"  {name}: Start {info['provider']} server or check endpoint "
+                        f"({info['endpoint']})",
+                        err=True,
+                    )
+                else:
+                    click.echo(
+                        f"  {name}: Endpoint reachable but query failed. "
+                        f"Check model '{info['model']}' availability.",
+                        err=True,
+                    )
+        if not results["local_backends"]:
+            click.echo(
+                "\n  No local LLM detected. Supported: mlx_lm.server (5044), "
+                "Ollama (11434), LM Studio (1234), vLLM (8000)",
+                err=True,
+            )
+        click.echo("\n  Run '3s init' for interactive setup.", err=True)
+        ctx.exit(1)
 
 
 # -- cross-exam -------------------------------------------------------------

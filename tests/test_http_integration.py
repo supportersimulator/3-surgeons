@@ -56,7 +56,7 @@ class TestFullStackIntegration:
         assert data["topic"] == "architecture"
         assert data["confidence"] == 0.92
         mock_xe.assert_called_once_with(
-            topic="architecture", depth="full", mode="iterative", file_paths=None,
+            topic="architecture", depth="full", mode="iterative",
         )
 
     @patch("three_surgeons.mcp.server._consult")
@@ -71,7 +71,7 @@ class TestFullStackIntegration:
         data = resp.json()
         assert data["topic"] == "database choice"
         assert "cardiologist_report" in data
-        mock_consult.assert_called_once_with(topic="database choice", file_paths=None)
+        mock_consult.assert_called_once_with(topic="database choice")
 
     @patch("three_surgeons.mcp.server._consensus")
     def test_consensus_returns_weighted_score(self, mock_consensus, client):

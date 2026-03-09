@@ -84,7 +84,6 @@ class TestToolDiscovery:
         data = resp.json()
         xe = next(t for t in data["tools"] if t["name"] == "cross_examine")
         assert "topic" in xe["params"]
-        assert xe["params"]["topic"]["required"] is True
 
     def test_probe_has_no_params(self, client):
         resp = client.get("/tools")
@@ -121,7 +120,7 @@ class TestToolInvocation:
         )
         assert resp.status_code == 200
         mock_xe.assert_called_once_with(
-            topic="test topic", depth="quick", mode="iterative", file_paths=None,
+            topic="test topic", depth="quick", mode="iterative",
         )
 
     @patch("three_surgeons.mcp.server._cross_examine")
@@ -133,7 +132,7 @@ class TestToolInvocation:
         )
         assert resp.status_code == 200
         mock_xe.assert_called_once_with(
-            topic="test topic", depth="full", mode="single", file_paths=None,
+            topic="test topic", depth="full", mode="single",
         )
 
     @patch("three_surgeons.mcp.server._consult")
@@ -142,7 +141,7 @@ class TestToolInvocation:
         resp = client.post("/tool/consult", json={"topic": "design"})
         assert resp.status_code == 200
         assert resp.json()["topic"] == "design"
-        mock_consult.assert_called_once_with(topic="design", file_paths=None)
+        mock_consult.assert_called_once_with(topic="design")
 
     @patch("three_surgeons.mcp.server._consensus")
     def test_consensus_invocation(self, mock_consensus, client):
@@ -166,12 +165,11 @@ class TestErrorHandling:
         assert "error" in data
         assert "nonexistent" in data["error"]
 
-    def test_missing_required_param_returns_400(self, client):
+    def test_missing_required_param_returns_422(self, client):
         resp = client.post("/tool/cross_examine", json={})
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         data = resp.json()
         assert "error" in data
-        assert "topic" in data["error"]
 
     def test_invalid_json_returns_400(self, client):
         resp = client.post(
@@ -222,16 +220,20 @@ class TestErrorHandling:
 class TestRateLimiting:
     """Basic rate limiting on tool invocation."""
 
-    def test_rate_limit_returns_429_after_burst(self, client):
+    @patch("three_surgeons.mcp.server._probe")
+    def test_rate_limit_returns_429_after_burst(self, mock_probe, client):
         """Rapid-fire calls should eventually get throttled."""
+        mock_probe.return_value = {"atlas": {"status": "ok"}}
         responses = []
         for _ in range(25):
             resp = client.post("/tool/probe")
             responses.append(resp.status_code)
         assert 429 in responses
 
-    def test_rate_limit_includes_retry_after(self, client):
+    @patch("three_surgeons.mcp.server._probe")
+    def test_rate_limit_includes_retry_after(self, mock_probe, client):
         """429 response should include retry guidance."""
+        mock_probe.return_value = {"atlas": {"status": "ok"}}
         for _ in range(25):
             resp = client.post("/tool/probe")
             if resp.status_code == 429:
@@ -239,6 +241,8 @@ class TestRateLimiting:
                 assert "error" in data
                 assert "rate" in data["error"].lower()
                 break
+        else:
+            pytest.fail("Expected 429 rate limit response within 25 requests")
 
 
 # ── CORS ──────────────────────────────────────────────────────────────────
@@ -280,3 +284,36 @@ class TestMCPMount:
         from three_surgeons.http.server import create_app
         app = create_app()
         assert app is not None
+
+
+# ── Auth attribution ────────────────────────────────────────────────────
+
+
+class TestAuthAttribution:
+    """X-User-Id and X-Session-Id headers are captured in audit entries."""
+
+    @patch("three_surgeons.mcp.server._probe")
+    def test_headers_passed_to_audit(self, mock_probe, client):
+        """X-User-Id and X-Session-Id headers are captured."""
+        mock_probe.return_value = {"atlas": {"status": "ok"}}
+        resp = client.post(
+            "/tool/probe",
+            headers={"X-User-Id": "user_42", "X-Session-Id": "sess_abc"},
+        )
+        assert resp.status_code == 200
+        # Verify audit entry has attribution
+        trail = client.app.state.audit
+        entries = trail.recent(limit=1)
+        assert entries[0]["user_id"] == "user_42"
+        assert entries[0]["session_id"] == "sess_abc"
+
+    @patch("three_surgeons.mcp.server._probe")
+    def test_missing_headers_default_to_anonymous(self, mock_probe, client):
+        """Missing auth headers default to 'anonymous'/'unknown'."""
+        mock_probe.return_value = {"atlas": {"status": "ok"}}
+        resp = client.post("/tool/probe")
+        assert resp.status_code == 200
+        trail = client.app.state.audit
+        entries = trail.recent(limit=1)
+        assert entries[0]["user_id"] == "anonymous"
+        assert entries[0]["session_id"] == "unknown"

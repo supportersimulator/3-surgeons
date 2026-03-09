@@ -22,9 +22,9 @@ from __future__ import annotations
 import json
 import logging
 import time as _time
-from collections import defaultdict
 from typing import Any, Callable
 
+from pydantic import ValidationError
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
@@ -32,6 +32,9 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 import three_surgeons.mcp.server as _mcp
+from three_surgeons.core.audit import AuditTrail
+from three_surgeons.http.rate_limit import create_rate_limiter
+from three_surgeons.http.schemas import TOOL_SCHEMAS
 
 logger = logging.getLogger(__name__)
 
@@ -43,32 +46,18 @@ BASE_TOOLS: dict[str, ToolSpec] = {
     "probe": {
         "fn_name": "_probe",
         "description": "Health check all 3 surgeons",
-        "params": {},
     },
     "cross_examine": {
         "fn_name": "_cross_examine",
         "description": "Full cross-examination protocol with iterative review",
-        "params": {
-            "topic": {"type": "string", "required": True},
-            "depth": {"type": "string", "required": False, "default": "full"},
-            "mode": {"type": "string", "required": False, "default": "single"},
-            "file_paths": {"type": "array", "required": False, "default": None},
-        },
     },
     "consult": {
         "fn_name": "_consult",
         "description": "Quick consult with both surgeons",
-        "params": {
-            "topic": {"type": "string", "required": True},
-            "file_paths": {"type": "array", "required": False, "default": None},
-        },
     },
     "consensus": {
         "fn_name": "_consensus",
         "description": "Confidence-weighted consensus on a claim",
-        "params": {
-            "claim": {"type": "string", "required": True},
-        },
     },
 }
 
@@ -76,47 +65,6 @@ BASE_TOOLS: dict[str, ToolSpec] = {
 def _resolve_fn(tool_spec: ToolSpec) -> Callable:
     """Resolve tool function from mcp.server module at call time."""
     return getattr(_mcp, tool_spec["fn_name"])
-
-
-def _validate_params(tool_spec: ToolSpec, body: dict) -> dict[str, Any]:
-    """Extract and validate params from request body against tool spec.
-
-    Returns kwargs dict for the tool function.
-    Raises ValueError on missing required params.
-    """
-    params_spec = tool_spec["params"]
-    kwargs: dict[str, Any] = {}
-
-    for name, spec in params_spec.items():
-        if name in body:
-            kwargs[name] = body[name]
-        elif spec.get("required", False):
-            raise ValueError(f"Missing required parameter: {name}")
-        elif "default" in spec:
-            kwargs[name] = spec["default"]
-
-    return kwargs
-
-
-# ── Rate limiting ────────────────────────────────────────────────────────
-
-
-class _RateLimiter:
-    """Simple per-tool token bucket rate limiter."""
-
-    def __init__(self, max_calls: int = 20, window_s: float = 60.0):
-        self.max_calls = max_calls
-        self.window_s = window_s
-        self._calls: dict[str, list[float]] = defaultdict(list)
-
-    def allow(self, key: str) -> bool:
-        now = _time.monotonic()
-        calls = self._calls[key]
-        self._calls[key] = [t for t in calls if now - t < self.window_s]
-        if len(self._calls[key]) >= self.max_calls:
-            return False
-        self._calls[key].append(now)
-        return True
 
 
 # ── Route handlers ───────────────────────────────────────────────────────
@@ -134,10 +82,15 @@ async def tools(request: Request) -> JSONResponse:
     """GET /tools — dynamic tool discovery with param schemas."""
     tool_list = []
     for name, spec in BASE_TOOLS.items():
+        schema_cls = TOOL_SCHEMAS.get(name)
+        if schema_cls is not None:
+            params = schema_cls.model_json_schema().get("properties", {})
+        else:
+            params = {}
         tool_list.append({
             "name": name,
             "description": spec["description"],
-            "params": spec["params"],
+            "params": params,
         })
     return JSONResponse({"tools": tool_list})
 
@@ -167,14 +120,23 @@ async def invoke_tool(request: Request) -> JSONResponse:
             status_code=400,
         )
 
-    # Validate params
-    try:
-        kwargs = _validate_params(tool_spec, body)
-    except ValueError as exc:
-        return JSONResponse(
-            {"error": str(exc)},
-            status_code=400,
-        )
+    # Validate params via Pydantic
+    schema = TOOL_SCHEMAS.get(name)
+    if schema:
+        try:
+            validated = schema.model_validate(body)
+            kwargs = validated.model_dump(exclude_none=True)
+        except ValidationError as exc:
+            return JSONResponse(
+                {"error": exc.errors()},
+                status_code=422,
+            )
+    else:
+        kwargs = body
+
+    # Auth attribution from headers (sanitized, capped at 128 chars)
+    user_id = (request.headers.get("X-User-Id") or "anonymous").strip()[:128]
+    session_id = (request.headers.get("X-Session-Id") or "unknown").strip()[:128]
 
     # Rate limit
     if not request.app.state.rate_limiter.allow(name):
@@ -184,10 +146,26 @@ async def invoke_tool(request: Request) -> JSONResponse:
         )
 
     # Invoke tool
+    start = _time.monotonic()
     try:
         result = fn(**kwargs)
+        duration = (_time.monotonic() - start) * 1000
+        if hasattr(request.app.state, "audit"):
+            request.app.state.audit.record(
+                tool=name, params=kwargs, status="success",
+                duration_ms=duration,
+                user_id=user_id, session_id=session_id,
+                metadata={"files_read": len(kwargs.get("file_paths") or [])},
+            )
         return JSONResponse(result)
     except Exception as exc:
+        duration = (_time.monotonic() - start) * 1000
+        if hasattr(request.app.state, "audit"):
+            request.app.state.audit.record(
+                tool=name, params=kwargs, status="error",
+                duration_ms=duration, error=str(exc),
+                user_id=user_id, session_id=session_id,
+            )
         logger.error("Tool %s failed: %s", name, exc, exc_info=True)
         return JSONResponse(
             {"error": f"Tool execution failed: {type(exc).__name__}"},
@@ -196,7 +174,6 @@ async def invoke_tool(request: Request) -> JSONResponse:
 
 
 # ── App assembly ─────────────────────────────────────────────────────────
-
 def create_app() -> Starlette:
     """Factory for the REST app — used by Task 9 (MCP + REST unified server)."""
     app = Starlette(routes=[
@@ -205,13 +182,14 @@ def create_app() -> Starlette:
         Route("/tool/{name}", invoke_tool, methods=["POST"]),
     ])
 
-    app.state.rate_limiter = _RateLimiter()
+    app.state.rate_limiter = create_rate_limiter()
+    app.state.audit = AuditTrail()
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", "X-User-Id", "X-Session-Id"],
     )
 
     # Mount MCP server if SDK available
