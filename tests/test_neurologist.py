@@ -12,9 +12,11 @@ from three_surgeons.core.neurologist import (
     ChallengeResult,
     CheckDetail,
     IntrospectResult,
+    IterativeChallengeResult,
     PulseResult,
     introspect,
     neurologist_challenge,
+    neurologist_challenge_iterative,
     neurologist_pulse,
     _parse_challenges,
 )
@@ -350,3 +352,58 @@ class TestNeurologistChallengeWithFiles:
 
         result = neurologist_challenge("test topic", mock_neuro)
         assert result.topic == "test topic"
+
+
+# ── neurologist_challenge_iterative ────────────────────────────────
+
+
+class TestIterativeChallenge:
+    """neurologist_challenge_iterative runs multiple rounds."""
+
+    def test_iterative_runs_multiple_rounds(self):
+        mock_neuro = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.content = json.dumps([{
+            "claim": "test claim",
+            "challenge": "test challenge",
+            "severity": "worth_testing",
+            "suggested_test": "try it"
+        }])
+        mock_neuro.query.return_value = mock_resp
+
+        result = neurologist_challenge_iterative("test topic", mock_neuro, rounds=2)
+
+        assert mock_neuro.query.call_count == 2
+        assert result.iteration_count == 2
+
+    def test_iterative_feeds_prior_challenges(self):
+        mock_neuro = MagicMock()
+        round1_resp = MagicMock()
+        round1_resp.ok = True
+        round1_resp.content = json.dumps([{
+            "claim": "assumption A",
+            "challenge": "might be wrong",
+            "severity": "critical"
+        }])
+        round2_resp = MagicMock()
+        round2_resp.ok = True
+        round2_resp.content = '[]'
+        mock_neuro.query.side_effect = [round1_resp, round2_resp]
+
+        neurologist_challenge_iterative("test topic", mock_neuro, rounds=2)
+
+        round2_call = mock_neuro.query.call_args_list[1]
+        prompt = round2_call.kwargs.get("prompt", round2_call[1].get("prompt", ""))
+        assert "assumption A" in prompt
+
+    def test_iterative_default_is_1_round(self):
+        mock_neuro = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.content = '[]'
+        mock_neuro.query.return_value = mock_resp
+
+        result = neurologist_challenge_iterative("test topic", mock_neuro)
+        assert mock_neuro.query.call_count == 1
+        assert result.iteration_count == 1

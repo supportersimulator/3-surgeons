@@ -52,6 +52,16 @@ class ChallengeResult:
 
 
 @dataclass
+class IterativeChallengeResult:
+    """Outcome of multi-round neurologist challenge."""
+
+    topic: str
+    challenges: List[Challenge]
+    iteration_count: int
+    per_round: List[List[Challenge]]
+
+
+@dataclass
 class IntrospectResult:
     """Self-report from a single surgeon."""
 
@@ -239,6 +249,56 @@ def _parse_challenges(raw: str) -> List[Challenge]:
         return results if results else [Challenge(claim=raw[:200], challenge=raw, severity="informational")]
     except (json.JSONDecodeError, TypeError, ValueError):
         return [Challenge(claim=raw[:200], challenge=raw, severity="informational")]
+
+
+def neurologist_challenge_iterative(
+    topic: str,
+    neurologist: Any,
+    evidence_store: Any = None,
+    file_paths: Optional[List[str]] = None,
+    rounds: int = 1,
+) -> IterativeChallengeResult:
+    """Run iterative corrigibility challenge (2-3 rounds).
+
+    Each round feeds prior challenges back to the neurologist for deeper probing.
+    """
+    all_challenges: List[Challenge] = []
+    per_round: List[List[Challenge]] = []
+
+    for i in range(rounds):
+        if i == 0:
+            result = neurologist_challenge(
+                topic, neurologist,
+                evidence_store=evidence_store,
+                file_paths=file_paths,
+            )
+        else:
+            # Build prompt with prior findings
+            prior_text = "\n".join(
+                f"- [{c.severity}] {c.claim}: {c.challenge}"
+                for c in all_challenges
+            )
+            deeper_topic = (
+                f"{topic}\n\n"
+                f"Prior challenge findings (round {i}):\n{prior_text}\n\n"
+                f"Dig deeper: what did the previous challenges MISS? "
+                f"What second-order effects or hidden assumptions remain?"
+            )
+            result = neurologist_challenge(
+                deeper_topic, neurologist,
+                evidence_store=evidence_store,
+                file_paths=file_paths,
+            )
+
+        per_round.append(result.challenges)
+        all_challenges.extend(result.challenges)
+
+    return IterativeChallengeResult(
+        topic=topic,
+        challenges=all_challenges,
+        iteration_count=rounds,
+        per_round=per_round,
+    )
 
 
 def introspect(providers: Dict[str, Any]) -> Dict[str, IntrospectResult]:
