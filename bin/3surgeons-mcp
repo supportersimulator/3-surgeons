@@ -12,15 +12,31 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# Verify Python has >=3.10, mcp, and three_surgeons importable
+has_mcp_runtime() {
+    local py="$1"
+    "$py" - <<'PY' >/dev/null 2>&1
+import sys
+if sys.version_info < (3, 10):
+    raise SystemExit(1)
+import mcp  # noqa: F401
+import three_surgeons  # noqa: F401
+PY
+}
+
 # 1. Plugin-local venv
 if [ -f "${PLUGIN_ROOT}/.venv/bin/python" ]; then
-    exec "${PLUGIN_ROOT}/.venv/bin/python" -m three_surgeons.mcp.server "$@"
+    if has_mcp_runtime "${PLUGIN_ROOT}/.venv/bin/python"; then
+        exec "${PLUGIN_ROOT}/.venv/bin/python" -m three_surgeons.mcp.server "$@"
+    fi
 fi
 
 # 2. User-level venv
 USER_VENV="${HOME}/.3surgeons/.venv/bin/python"
 if [ -f "$USER_VENV" ]; then
-    exec "$USER_VENV" -m three_surgeons.mcp.server "$@"
+    if has_mcp_runtime "$USER_VENV"; then
+        exec "$USER_VENV" -m three_surgeons.mcp.server "$@"
+    fi
 fi
 
 # 3. System python with PYTHONPATH fallback
@@ -30,13 +46,12 @@ export PYTHONPATH="${PLUGIN_ROOT}:${PYTHONPATH:-}"
 # Try python3 first, then python
 for PY in python3 python; do
     if command -v "$PY" >/dev/null 2>&1; then
-        # Verify the package is importable
-        if "$PY" -c "import three_surgeons" 2>/dev/null; then
+        if has_mcp_runtime "$PY"; then
             exec "$PY" -m three_surgeons.mcp.server "$@"
         fi
     fi
 done
 
-echo "Error: Cannot find Python with three_surgeons installed." >&2
-echo "Run: cd ${PLUGIN_ROOT} && python -m venv .venv && .venv/bin/pip install -e '.[mcp]'" >&2
+echo "Error: Cannot find Python >=3.10 with mcp and three_surgeons installed." >&2
+echo "Run: cd ${PLUGIN_ROOT} && python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'" >&2
 exit 1
