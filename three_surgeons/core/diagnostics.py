@@ -132,3 +132,13 @@ def check_local_backends() -> DiagnosticResult:
         "No local LLM backends detected",
         fix="Start Ollama, LM Studio, or mlx_lm.server",
     )
+
+
+def run_all_checks() -> list[DiagnosticResult]:
+    """Run all diagnostic checks, return list of results."""
+    return [
+        check_python_version(),
+        check_mcp_importable(),
+        check_config(),
+        check_local_backends(),
+    ]

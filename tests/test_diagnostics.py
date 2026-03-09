@@ -95,3 +95,25 @@ class TestCheckLocalBackends:
             result = check_local_backends()
             assert result.code == DiagnosticCode.LOC_OK
             assert result.passed
+
+
+from three_surgeons.core.diagnostics import run_all_checks
+
+
+class TestRunAllChecks:
+    def test_returns_list_of_results(self) -> None:
+        results = run_all_checks()
+        assert isinstance(results, list)
+        assert len(results) >= 4  # python, mcp, config, backends
+        for r in results:
+            assert isinstance(r, DiagnosticResult)
+
+    def test_to_json_structure(self) -> None:
+        results = run_all_checks()
+        output = {
+            "checks": [r.to_dict() for r in results],
+            "all_passed": all(r.passed for r in results),
+            "failed": [r.to_dict() for r in results if not r.passed],
+        }
+        assert "checks" in output
+        assert isinstance(output["all_passed"], bool)
