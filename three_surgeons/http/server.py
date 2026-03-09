@@ -3,11 +3,16 @@
 Thin bridge between IDE adapters (VS Code, Cursor) and the same core functions
 used by the MCP server.  Run: 3s serve  (or: python -m three_surgeons.http)
 
+NOTE: All tool functions (_probe, _cross_examine, etc.) are SYNCHRONOUS.
+Starlette runs them in a threadpool via async route handlers. LLM calls may
+block for 10-120s — this is expected and handled by the VS Code adapter's
+AbortSignal.timeout(120_000).
+
 4 base tools exposed (3-surgeon consensus — sentinel/gates are internal):
   POST /tool/probe          — health-check all 3 surgeons
-  POST /tool/cross_examine  — full cross-examination
-  POST /tool/consult        — quick consult
-  POST /tool/consensus      — confidence-weighted consensus
+  POST /tool/cross_examine  — full cross-examination (may take 30-120s)
+  POST /tool/consult        — quick consult (10-30s)
+  POST /tool/consensus      — confidence-weighted consensus (10-30s)
 
   GET  /health              — server health + tool list
   GET  /tools               — dynamic tool discovery
