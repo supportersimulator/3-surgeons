@@ -27,6 +27,19 @@ from three_surgeons.core.state import MemoryBackend
 
 logger = logging.getLogger(__name__)
 
+
+def _make_neuro(config: Config) -> LLMProvider:
+    """Create neurologist LLMProvider with GPU lock for local providers."""
+    if config.neurologist.provider in ("ollama", "mlx", "local", "vllm", "lmstudio"):
+        from pathlib import Path
+
+        from three_surgeons.core.priority_queue import make_gpu_locked_adapter
+
+        lock_dir = Path(config.gpu_lock_path) if config.gpu_lock_path else None
+        adapter = make_gpu_locked_adapter(config.neurologist, lock_dir=lock_dir)
+        return LLMProvider(config.neurologist, query_adapter=adapter)
+    return LLMProvider(config.neurologist)
+
 # ── Tool registry ───────────────────────────────────────────────────────
 
 TOOL_NAMES: list[str] = [
@@ -79,7 +92,7 @@ def _build_surgery_team(
     state = _build_state()
     evidence = _build_evidence(config)
     cardio = LLMProvider(config.cardiologist)
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     return SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
     )
@@ -270,7 +283,7 @@ def _ab_conclude(test_id: str, verdict: str) -> dict:
 def _neurologist_pulse_impl() -> dict:
     """System health pulse check via neurologist."""
     config = _build_config()
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     state = _build_state()
     evidence = _build_evidence(config)
     result = neurologist_pulse(
@@ -290,7 +303,7 @@ def _neurologist_pulse_impl() -> dict:
 def _neurologist_challenge_impl(topic: str) -> dict:
     """Corrigibility skeptic challenge."""
     config = _build_config()
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     evidence = _build_evidence(config)
     result = neurologist_challenge(topic, neuro, evidence_store=evidence)
     return {
@@ -311,11 +324,14 @@ def _introspect_impl() -> dict:
     """Ask each surgeon to self-report capabilities."""
     config = _build_config()
     providers = {}
-    for name, cfg in [("cardiologist", config.cardiologist), ("neurologist", config.neurologist)]:
-        try:
-            providers[name] = LLMProvider(cfg)
-        except Exception:
-            pass
+    try:
+        providers["cardiologist"] = LLMProvider(config.cardiologist)
+    except Exception:
+        pass
+    try:
+        providers["neurologist"] = _make_neuro(config)
+    except Exception:
+        pass
     results = introspect(providers)
     return {
         name: {
@@ -332,7 +348,7 @@ def _introspect_impl() -> dict:
 def _ask_local_impl(prompt: str) -> dict:
     """Direct query to the neurologist."""
     config = _build_config()
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     resp = ask_local(prompt, neuro)
     return {"ok": resp.ok, "content": resp.content}
 

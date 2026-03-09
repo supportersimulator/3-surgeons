@@ -1,7 +1,7 @@
 """Layer 2 REST server — Starlette ASGI app exposing 3-Surgeon tools over HTTP.
 
 Thin bridge between IDE adapters (VS Code, Cursor) and the same core functions
-used by the MCP server.  Run: uvicorn three_surgeons.http.server:app --port 3456
+used by the MCP server.  Run: 3s serve  (or: python -m three_surgeons.http)
 
 4 base tools exposed (3-surgeon consensus — sentinel/gates are internal):
   POST /tool/probe          — health-check all 3 surgeons
@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import traceback
 from typing import Any, Callable
 
 from starlette.applications import Starlette
@@ -149,7 +148,7 @@ async def invoke_tool(request: Request) -> JSONResponse:
     # Invoke tool
     try:
         result = fn(**kwargs)
-        return JSONResponse({"result": result})
+        return JSONResponse(result)
     except Exception as exc:
         logger.error("Tool %s failed: %s", name, exc, exc_info=True)
         return JSONResponse(
@@ -160,10 +159,23 @@ async def invoke_tool(request: Request) -> JSONResponse:
 
 # ── App assembly ─────────────────────────────────────────────────────────
 
-routes = [
-    Route("/health", health, methods=["GET"]),
-    Route("/tools", tools, methods=["GET"]),
-    Route("/tool/{name}", invoke_tool, methods=["POST"]),
-]
+def create_app() -> Starlette:
+    """Factory for the REST app — used by Task 9 (MCP + REST unified server)."""
+    app = Starlette(routes=[
+        Route("/health", health, methods=["GET"]),
+        Route("/tools", tools, methods=["GET"]),
+        Route("/tool/{name}", invoke_tool, methods=["POST"]),
+    ])
 
-app = Starlette(routes=routes)
+    # Mount MCP server if SDK available
+    try:
+        from three_surgeons.mcp.server import create_server
+        mcp_server = create_server()
+        if mcp_server is not None:
+            mcp_asgi = mcp_server.sse_app()
+            app.mount("/mcp", mcp_asgi)
+            logger.info("MCP server mounted at /mcp")
+    except Exception as exc:
+        logger.info("MCP not mounted: %s", exc)
+
+    return app

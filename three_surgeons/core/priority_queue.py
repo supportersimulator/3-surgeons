@@ -233,3 +233,101 @@ def _is_pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+# ── Default lock directory ────────────────────────────────────────────
+
+# Use /tmp so the lock file coordinates with ContextDNA's file-based
+# fallback lock (/tmp/contextdna_gpu.lock).  The 3-surgeons lock lives
+# alongside it — same directory, different filename — so both systems
+# respect the same GPU serialisation boundary.
+DEFAULT_LOCK_DIR = Path("/tmp/3surgeons")
+
+
+def make_gpu_locked_adapter(
+    config: "SurgeonConfig",
+    lock_dir: Optional[Path] = None,
+    lock_timeout: float = 90.0,
+) -> "Callable":
+    """Create a QueryAdapter-compatible callable that wraps HTTP calls with a GPU lock.
+
+    The returned function matches the ``QueryAdapter`` protocol::
+
+        def adapter(system, prompt, max_tokens, temperature, timeout_s) -> LLMResponse
+
+    It acquires a file-based GPU lock before hitting the local LLM, preventing
+    concurrent Metal operations that can crash macOS.  When the lock is held by
+    another process (ContextDNA scheduler, webhook, etc.) the caller blocks with
+    exponential backoff until the lock is free or *lock_timeout* expires.
+
+    Only useful for local providers (mlx, ollama, vllm, lmstudio).  For remote
+    providers the lock is unnecessary — pass ``query_adapter=None`` instead.
+    """
+    import httpx as _httpx  # deferred so import cost is only paid when used
+
+    from three_surgeons.core.models import LLMResponse
+
+    _lock_dir = lock_dir or DEFAULT_LOCK_DIR
+    _lock_dir.mkdir(parents=True, exist_ok=True)
+    _endpoint = config.endpoint.rstrip("/")
+    _model = config.model
+    _api_key = config.get_api_key()
+
+    def _adapter(
+        system: str,
+        prompt: str,
+        max_tokens: int,
+        temperature: float,
+        timeout_s: float,
+    ) -> "LLMResponse":
+        lock = GPULock(lock_dir=_lock_dir)
+        if not lock.acquire(timeout=lock_timeout):
+            return LLMResponse(
+                ok=False,
+                content=f"GPU lock timeout after {lock_timeout}s — another process holds the lock",
+                model=_model,
+            )
+        try:
+            url = f"{_endpoint}/chat/completions"
+            headers: Dict[str, str] = {"Content-Type": "application/json"}
+            if _api_key:
+                headers["Authorization"] = f"Bearer {_api_key}"
+
+            payload = {
+                "model": _model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+
+            t0 = time.monotonic()
+            with _httpx.Client(timeout=timeout_s) as client:
+                resp = client.post(url, json=payload, headers=headers)
+                resp.raise_for_status()
+            latency_ms = int((time.monotonic() - t0) * 1000)
+
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+
+            return LLMResponse(
+                ok=True,
+                content=content,
+                latency_ms=latency_ms,
+                model=_model,
+                tokens_in=usage.get("prompt_tokens", 0),
+                tokens_out=usage.get("completion_tokens", 0),
+            )
+        except Exception as exc:
+            return LLMResponse(
+                ok=False,
+                content=f"GPU-locked query failed: {exc}",
+                model=_model,
+            )
+        finally:
+            lock.release()
+
+    return _adapter

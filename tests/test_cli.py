@@ -285,16 +285,16 @@ class TestServeCommand:
         result = runner.invoke(cli, ["serve", "--help"])
         assert "3456" in result.output
 
-    @patch("three_surgeons.cli.main.uvicorn", create=True)
-    @patch("three_surgeons.cli.main.create_app", create=True)
-    def test_serve_invokes_uvicorn(self, mock_create_app, mock_uvicorn) -> None:
+    @patch("uvicorn.run")
+    @patch("three_surgeons.http.server.create_app")
+    def test_serve_invokes_uvicorn(self, mock_create_app, mock_uvicorn_run) -> None:
         mock_app = MagicMock()
         mock_create_app.return_value = mock_app
         runner = CliRunner()
         result = runner.invoke(cli, ["serve"])
         assert result.exit_code == 0
         mock_create_app.assert_called_once()
-        mock_uvicorn.run.assert_called_once_with(mock_app, host="127.0.0.1", port=3456)
+        mock_uvicorn_run.assert_called_once_with(mock_app, host="127.0.0.1", port=3456)
 
 
 class TestMainEntryPoint:

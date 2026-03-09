@@ -16,10 +16,10 @@ from starlette.testclient import TestClient
 
 @pytest.fixture()
 def client():
-    """Create a test client with mocked tool functions."""
-    from three_surgeons.http.server import app
+    """Create a fresh test client per test (no shared state)."""
+    from three_surgeons.http.server import create_app
 
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 # ── Health endpoint ──────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ class TestToolInvocation:
         resp = client.post("/tool/probe")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["result"]["atlas"]["status"] == "ok"
+        assert data["atlas"]["status"] == "ok"
         mock_probe.assert_called_once_with()
 
     @patch("three_surgeons.mcp.server._cross_examine")
@@ -141,7 +141,7 @@ class TestToolInvocation:
         mock_consult.return_value = {"topic": "design", "cardiologist_report": "ok"}
         resp = client.post("/tool/consult", json={"topic": "design"})
         assert resp.status_code == 200
-        assert resp.json()["result"]["topic"] == "design"
+        assert resp.json()["topic"] == "design"
         mock_consult.assert_called_once_with(topic="design")
 
     @patch("three_surgeons.mcp.server._consensus")
@@ -149,7 +149,7 @@ class TestToolInvocation:
         mock_consensus.return_value = {"claim": "X is true", "weighted_score": 0.8}
         resp = client.post("/tool/consensus", json={"claim": "X is true"})
         assert resp.status_code == 200
-        assert resp.json()["result"]["weighted_score"] == 0.8
+        assert resp.json()["weighted_score"] == 0.8
         mock_consensus.assert_called_once_with(claim="X is true")
 
 
@@ -202,3 +202,22 @@ class TestErrorHandling:
         """sentinel_run should not be invocable via the REST API."""
         resp = client.post("/tool/sentinel_run", json={"content": "test"})
         assert resp.status_code == 404
+
+
+# ── MCP mount ────────────────────────────────────────────────────────────
+
+
+class TestMCPMount:
+    """MCP server mounts alongside REST when mcp SDK is available."""
+
+    def test_mcp_mount_does_not_break_rest(self, client):
+        """REST endpoints still work regardless of MCP mount status."""
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+
+    def test_create_app_succeeds_without_mcp(self):
+        """create_app() works even if mcp SDK is not installed."""
+        from three_surgeons.http.server import create_app
+        app = create_app()
+        assert app is not None

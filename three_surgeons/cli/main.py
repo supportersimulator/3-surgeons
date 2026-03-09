@@ -914,30 +914,20 @@ def docs_scan(path: str) -> None:
 @click.option("--port", default=3456, type=int, help="Port (default: 3456)")
 def serve(host: str, port: int) -> None:
     """Start the 3-Surgeons HTTP server (Layer 2)."""
-    import sys
+    try:
+        import uvicorn
 
-    _mod = sys.modules[__name__]
-
-    # Use module-level attributes if set (allows test patching),
-    # otherwise do lazy imports.
-    if not hasattr(_mod, "uvicorn") or not hasattr(_mod, "create_app"):
-        try:
-            import uvicorn as _uvicorn
-
-            from three_surgeons.http.server import create_app as _create_app
-
-            _mod.uvicorn = _uvicorn
-            _mod.create_app = _create_app
-        except ImportError:
-            click.echo(
-                "Error: HTTP dependencies not installed. "
-                "Run: pip install 'three-surgeons[http]'"
-            )
-            raise SystemExit(1)
+        from three_surgeons.http.server import create_app
+    except ImportError:
+        click.echo(
+            "Error: HTTP dependencies not installed. "
+            "Run: pip install 'three-surgeons[http]'"
+        )
+        raise SystemExit(1)
 
     click.echo(f"3-Surgeons server starting on {host}:{port}")
-    app = _mod.create_app()
-    _mod.uvicorn.run(app, host=host, port=port)
+    app = create_app()
+    uvicorn.run(app, host=host, port=port)
 
 
 # -- main entry point -------------------------------------------------------
