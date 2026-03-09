@@ -19,6 +19,7 @@ import logging
 from typing import Any, Callable
 
 from starlette.applications import Starlette
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -166,6 +167,13 @@ def create_app() -> Starlette:
         Route("/tools", tools, methods=["GET"]),
         Route("/tool/{name}", invoke_tool, methods=["POST"]),
     ])
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type"],
+    )
 
     # Mount MCP server if SDK available
     try:

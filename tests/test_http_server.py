@@ -216,6 +216,28 @@ class TestErrorHandling:
         assert resp.status_code == 404
 
 
+# ── CORS ──────────────────────────────────────────────────────────────────
+
+
+class TestCORS:
+    """CORS headers present on responses."""
+
+    def test_health_has_cors_headers(self, client):
+        resp = client.get("/health", headers={"Origin": "http://localhost:3000"})
+        assert "access-control-allow-origin" in resp.headers
+
+    def test_preflight_returns_200(self, client):
+        resp = client.options(
+            "/tool/probe",
+            headers={
+                "Origin": "http://localhost:3000",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        assert resp.status_code == 200
+        assert "access-control-allow-origin" in resp.headers
+
+
 # ── MCP mount ────────────────────────────────────────────────────────────
 
 
