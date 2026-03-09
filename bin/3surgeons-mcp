@@ -53,12 +53,13 @@ for PY in python3 python; do
 done
 
 # --- No runtime found — structured error output ---
+ESCAPED_ROOT=$(printf '%s' "${PLUGIN_ROOT}" | sed 's/\\/\\\\/g; s/"/\\"/g')
 cat >&2 <<DIAG
 {
   "code": "3S-MCP-MISS",
   "passed": false,
   "message": "Cannot find Python >=3.10 with mcp and three_surgeons installed",
-  "fix": "cd ${PLUGIN_ROOT} && python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'"
+  "fix": "cd ${ESCAPED_ROOT} && python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'"
 }
 DIAG
 exit 1

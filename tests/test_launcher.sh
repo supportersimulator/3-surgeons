@@ -9,7 +9,7 @@ PASS=0; FAIL=0
 
 assert_contains() {
     local label="$1" output="$2" expected="$3"
-    if echo "$output" | grep -q "$expected"; then
+    if echo "$output" | grep -qF "$expected"; then
         echo "  PASS: $label"
         ((PASS++)) || true
     else
@@ -21,8 +21,12 @@ assert_contains() {
 echo "=== MCP Launcher Smoke Tests ==="
 
 # Test: launcher outputs 3S- error code when no runtime found
-# Use a PATH with only basic utils (no python) to force the no-runtime path
-OUTPUT=$(PATH=/usr/bin:/bin HOME=/nonexistent "$LAUNCHER" 2>&1 || true)
+# Copy launcher to temp dir so PLUGIN_ROOT has no .venv
+TMPDIR_TEST=$(mktemp -d)
+cp "$LAUNCHER" "$TMPDIR_TEST/3surgeons-mcp"
+chmod +x "$TMPDIR_TEST/3surgeons-mcp"
+OUTPUT=$(PATH=/usr/bin:/bin HOME=/nonexistent "$TMPDIR_TEST/3surgeons-mcp" 2>&1 || true)
+rm -rf "$TMPDIR_TEST"
 assert_contains "error code in output" "$OUTPUT" "3S-"
 
 # Test: launcher script is executable
