@@ -14,11 +14,28 @@ Claude may confabulate confidently where GPT hedges. A local model catches patte
 
 ## Install
 
-### Claude Code
+### Claude Code (Marketplace)
 
 ```bash
-claude plugin add supportersimulator/3-surgeons
+# Add the marketplace, then install
+/plugin marketplace add supportersimulator/3-surgeons
+/plugin install 3-surgeons@supportersimulator/3-surgeons
 ```
+
+### VS Code (Agent Plugin — requires 1.110+)
+
+1. Install **GitHub Copilot Chat** extension (not the legacy "GitHub Copilot" extension)
+2. Sign into GitHub in VS Code (Copilot-entitled account)
+3. Open Settings (`Cmd+,` / `Ctrl+,`):
+   - Set `chat.plugins.enabled` → `true`
+   - Add to `chat.plugins.marketplaces` → `supportersimulator/3-surgeons`
+4. Reload window, open Chat panel, type `@agentPlugins` to verify
+
+**Local fallback** (if marketplace doesn't resolve):
+```bash
+git clone https://github.com/supportersimulator/3-surgeons.git ~/3-surgeons
+```
+Then add the absolute path in `chat.plugins.paths`.
 
 ### Cursor
 
@@ -26,7 +43,7 @@ claude plugin add supportersimulator/3-surgeons
 cursor plugin add supportersimulator/3-surgeons
 ```
 
-### Manual
+### Manual (any IDE)
 
 ```bash
 git clone https://github.com/supportersimulator/3-surgeons.git ~/.claude/plugins/3-surgeons
