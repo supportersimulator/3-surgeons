@@ -1,9 +1,13 @@
 """Structured diagnostic checks with 3S-* error codes."""
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Optional
+
+from three_surgeons.core.config import detect_local_backend
 
 
 class DiagnosticCode(Enum):
@@ -73,3 +77,58 @@ class DiagnosticResult:
         if self.fix:
             d["fix"] = self.fix
         return d
+
+
+def check_python_version() -> DiagnosticResult:
+    """Check Python >= 3.10."""
+    v = sys.version_info
+    version_str = f"{v[0]}.{v[1]}.{v[2]}"
+    if v >= (3, 10):
+        return DiagnosticResult.ok(DiagnosticCode.PY_OK, f"Python {version_str}")
+    return DiagnosticResult.fail(
+        DiagnosticCode.PY_OLD,
+        f"Python {version_str} < 3.10",
+        fix="brew install python@3.12  # or: pyenv install 3.12",
+    )
+
+
+def check_mcp_importable() -> DiagnosticResult:
+    """Check that mcp package is importable."""
+    try:
+        import mcp  # noqa: F401
+
+        return DiagnosticResult.ok(DiagnosticCode.MCP_OK, "mcp package available")
+    except ImportError:
+        return DiagnosticResult.fail(
+            DiagnosticCode.MCP_MISSING,
+            "mcp package not installed",
+            fix="pip install 'three-surgeons[mcp]'",
+        )
+
+
+def check_config() -> DiagnosticResult:
+    """Check config file discovery."""
+    project_path = Path.cwd() / ".3surgeons.yaml"
+    home_path = Path.home() / ".3surgeons" / "config.yaml"
+    if project_path.is_file():
+        return DiagnosticResult.ok(DiagnosticCode.CFG_OK, f"Config: {project_path}")
+    if home_path.is_file():
+        return DiagnosticResult.ok(DiagnosticCode.CFG_OK, f"Config: {home_path}")
+    return DiagnosticResult.fail(
+        DiagnosticCode.CFG_DEFAULTS,
+        "Using defaults (no config file found)",
+        fix="Run: 3s init",
+    )
+
+
+def check_local_backends() -> DiagnosticResult:
+    """Check for local LLM backends."""
+    backends = detect_local_backend(timeout_s=2.0)
+    if backends:
+        names = ", ".join(b["provider"] for b in backends)
+        return DiagnosticResult.ok(DiagnosticCode.LOC_OK, f"Found: {names}")
+    return DiagnosticResult.fail(
+        DiagnosticCode.LOC_NONE,
+        "No local LLM backends detected",
+        fix="Start Ollama, LM Studio, or mlx_lm.server",
+    )
