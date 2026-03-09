@@ -10,6 +10,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from three_surgeons.core.cross_exam import _read_file_context
+
 
 @dataclass
 class CardioReviewResult:
@@ -51,6 +53,7 @@ def cardio_review(
     surgery_team: Any,
     evidence_store: Any = None,
     git_context: Optional[str] = None,
+    file_paths: Optional[List[str]] = None,
 ) -> CardioReviewResult:
     """Run a cardiologist cross-examination review.
 
@@ -69,6 +72,10 @@ def cardio_review(
                 enriched_topic += f"\n\nEvidence context:\n{evidence_text}"
         except Exception:
             pass
+
+    file_context = _read_file_context(file_paths)
+    if file_context:
+        enriched_topic += f"\n\n{file_context}"
 
     # Run cross-examination
     result = surgery_team.cross_examine(enriched_topic)

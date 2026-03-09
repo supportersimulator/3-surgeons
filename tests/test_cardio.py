@@ -116,6 +116,43 @@ class TestCardioReview:
         assert isinstance(result, CardioReviewResult)
 
 
+# ── cardio_review with file_paths ────────────────────────────────────
+
+
+class TestCardioReviewWithFiles:
+    """cardio_review with file_paths parameter."""
+
+    def _make_team(self, synthesis="synthesis"):
+        team = MagicMock()
+        result = MagicMock()
+        result.cardiologist_report = "findings"
+        result.neurologist_report = "blind spots"
+        result.synthesis = synthesis
+        team.cross_examine.return_value = result
+        return team
+
+    def test_cardio_review_includes_file_content(self, tmp_path):
+        test_file = tmp_path / "handler.py"
+        test_file.write_text("def handle_request(req):\n    return 200\n")
+
+        team = self._make_team()
+        cardio_review("test topic", team, file_paths=[str(test_file)])
+
+        call_args = team.cross_examine.call_args
+        enriched = call_args[0][0] if call_args[0] else call_args.kwargs.get("topic", "")
+        assert "handle_request" in enriched
+
+    def test_missing_file_skipped(self):
+        team = self._make_team()
+        result = cardio_review("test topic", team, file_paths=["/nonexistent/file.py"])
+        assert result.topic == "test topic"
+
+    def test_no_file_paths_backward_compatible(self):
+        team = self._make_team()
+        result = cardio_review("test topic", team)
+        assert result.topic == "test topic"
+
+
 # ── ab_validate ──────────────────────────────────────────────────────
 
 
