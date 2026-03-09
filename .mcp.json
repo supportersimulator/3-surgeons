@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "3-surgeons": {
+      "command": "${PLUGIN_ROOT}/bin/3surgeons-mcp",
+      "args": [],
+      "tools": ["*"]
+    }
+  }
+}

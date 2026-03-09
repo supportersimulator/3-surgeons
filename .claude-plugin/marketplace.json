@@ -1,6 +1,9 @@
 {
   "name": "3-surgeons-marketplace",
   "description": "Marketplace for the 3-Surgeons multi-model consensus plugin",
+  "metadata": {
+    "description": "Multi-model consensus marketplace — 3 LLMs cross-examine each other to catch blind spots on critical decisions"
+  },
   "owner": {
     "name": "Aaron Tjomsland",
     "email": "aaron@ersimulator.com"
@@ -14,7 +17,30 @@
       "author": {
         "name": "Aaron Tjomsland",
         "email": "aaron@ersimulator.com"
-      }
+      },
+      "skills": [
+        "./skills/ab-testing",
+        "./skills/ab-validate",
+        "./skills/architectural-gate",
+        "./skills/cardio-review",
+        "./skills/consensus",
+        "./skills/counter-position",
+        "./skills/cross-examination",
+        "./skills/direct-query",
+        "./skills/doc-organizer",
+        "./skills/integrity-check",
+        "./skills/invariance-health",
+        "./skills/neurologist",
+        "./skills/post-implementation-verification",
+        "./skills/pre-implementation-review",
+        "./skills/probe",
+        "./skills/quality-gates",
+        "./skills/research",
+        "./skills/review-loop",
+        "./skills/sentinel",
+        "./skills/setup-team",
+        "./skills/using-3-surgeons"
+      ]
     }
   ]
 }
