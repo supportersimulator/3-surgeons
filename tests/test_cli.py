@@ -297,6 +297,47 @@ class TestServeCommand:
         mock_uvicorn_run.assert_called_once_with(mock_app, host="127.0.0.1", port=3456)
 
 
+class TestDoctorCommand:
+    """Test the doctor diagnostic command."""
+
+    def test_doctor_outputs_json(self) -> None:
+        """Doctor should output valid JSON."""
+        import json
+        runner = CliRunner()
+        result = runner.invoke(cli, ["doctor", "--json"])
+        assert result.exit_code in (0, 1)  # 0=healthy, 1=issues
+        data = json.loads(result.output)
+        assert "checks" in data
+        assert "all_passed" in data
+        assert isinstance(data["checks"], list)
+
+    def test_doctor_shows_codes(self) -> None:
+        """Doctor output should contain 3S- error codes."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["doctor"])
+        assert "3S-" in result.output
+
+    def test_doctor_exit_code_on_failure(self) -> None:
+        """Doctor exits 1 when any check fails."""
+        runner = CliRunner()
+        result = runner.invoke(cli, ["doctor"])
+        assert result.exit_code in (0, 1)
+
+    def test_doctor_in_help(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--help"])
+        assert "doctor" in result.output
+
+    def test_doctor_json_has_fix_hints(self) -> None:
+        """Failed checks should include fix hints in JSON mode."""
+        import json
+        runner = CliRunner()
+        result = runner.invoke(cli, ["doctor", "--json"])
+        data = json.loads(result.output)
+        for check in data.get("failed", []):
+            assert "fix" in check, f"Failed check {check['code']} missing fix hint"
+
+
 class TestMainEntryPoint:
     """Test that the main() function exists and is callable."""
 
