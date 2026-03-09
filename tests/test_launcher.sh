@@ -38,6 +38,14 @@ else
     ((FAIL++)) || true
 fi
 
+# Test: launcher attempts bootstrap message when no runtime
+TMPDIR_TEST2=$(mktemp -d)
+cp "$LAUNCHER" "$TMPDIR_TEST2/3surgeons-mcp"
+chmod +x "$TMPDIR_TEST2/3surgeons-mcp"
+OUTPUT2=$(PATH=/usr/bin:/bin HOME=/nonexistent "$TMPDIR_TEST2/3surgeons-mcp" 2>&1 || true)
+rm -rf "$TMPDIR_TEST2"
+assert_contains "bootstrap attempt in output" "$OUTPUT2" "bootstrap"
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] || exit 1
