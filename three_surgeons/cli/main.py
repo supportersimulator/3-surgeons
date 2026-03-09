@@ -17,6 +17,17 @@ from three_surgeons.core.models import LLMProvider
 from three_surgeons.core.state import create_backend_from_config
 
 
+def _make_neuro(config: Config) -> LLMProvider:
+    """Create neurologist LLMProvider with GPU lock for local providers."""
+    if config.neurologist.provider in ("ollama", "mlx", "local", "vllm", "lmstudio"):
+        from three_surgeons.core.priority_queue import make_gpu_locked_adapter
+
+        lock_dir = Path(config.gpu_lock_path) if config.gpu_lock_path else None
+        adapter = make_gpu_locked_adapter(config.neurologist, lock_dir=lock_dir)
+        return LLMProvider(config.neurologist, query_adapter=adapter)
+    return LLMProvider(config.neurologist)
+
+
 @click.group()
 @click.pass_context
 def cli(ctx: click.Context) -> None:
@@ -244,7 +255,7 @@ def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str]) -> No
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     team = SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
     )
@@ -415,7 +426,7 @@ def consult(ctx: click.Context, topic: str) -> None:
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     team = SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
     )
@@ -453,7 +464,7 @@ def consensus(ctx: click.Context, claim: str) -> None:
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     team = SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
     )
@@ -536,7 +547,7 @@ def neurologist_pulse_cmd(ctx: click.Context) -> None:
     from three_surgeons.core.neurologist import neurologist_pulse
 
     config: Config = ctx.obj["config"]
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
 
@@ -567,7 +578,7 @@ def neurologist_challenge_cmd(ctx: click.Context, topic: str) -> None:
     from three_surgeons.core.neurologist import neurologist_challenge
 
     config: Config = ctx.obj["config"]
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
 
     click.echo(f"Challenging: {topic}\n")
@@ -624,7 +635,7 @@ def ask_local_cmd(ctx: click.Context, prompt: str) -> None:
     from three_surgeons.core.direct import ask_local
 
     config: Config = ctx.obj["config"]
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     resp = ask_local(prompt, neuro)
 
     if resp.ok:
@@ -672,7 +683,7 @@ def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str) -> None:
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     team = SurgeryTeam(cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state)
 
     click.echo(f"Cardio review: {topic}\n")
@@ -708,7 +719,7 @@ def ab_validate_cmd(ctx: click.Context, description: str) -> None:
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
     cardio = LLMProvider(config.cardiologist)
-    neuro = LLMProvider(config.neurologist)
+    neuro = _make_neuro(config)
     team = SurgeryTeam(cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state)
 
     click.echo(f"Validating: {description}\n")
@@ -895,9 +906,47 @@ def docs_scan(path: str) -> None:
     click.echo(f"\nRun '3s docs-init --scan' to set up all recommended projects.")
 
 
+# -- serve ------------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Bind address")
+@click.option("--port", default=3456, type=int, help="Port (default: 3456)")
+def serve(host: str, port: int) -> None:
+    """Start the 3-Surgeons HTTP server (Layer 2)."""
+    import sys
+
+    _mod = sys.modules[__name__]
+
+    # Use module-level attributes if set (allows test patching),
+    # otherwise do lazy imports.
+    if not hasattr(_mod, "uvicorn") or not hasattr(_mod, "create_app"):
+        try:
+            import uvicorn as _uvicorn
+
+            from three_surgeons.http.server import create_app as _create_app
+
+            _mod.uvicorn = _uvicorn
+            _mod.create_app = _create_app
+        except ImportError:
+            click.echo(
+                "Error: HTTP dependencies not installed. "
+                "Run: pip install 'three-surgeons[http]'"
+            )
+            raise SystemExit(1)
+
+    click.echo(f"3-Surgeons server starting on {host}:{port}")
+    app = _mod.create_app()
+    _mod.uvicorn.run(app, host=host, port=port)
+
+
 # -- main entry point -------------------------------------------------------
 
 
 def main() -> None:
     """Entry point for the 3s console script."""
     cli()
+
+
+if __name__ == "__main__":
+    main()

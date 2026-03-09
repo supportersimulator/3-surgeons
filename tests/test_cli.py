@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
@@ -199,16 +199,47 @@ class TestCrossExamMode:
 
     def test_mode_flag_accepted(self, tmp_path, monkeypatch):
         """The --mode flag should be accepted without error."""
-        runner = CliRunner()
-        # Will fail on LLM connection but flag should parse
-        result = runner.invoke(cli, ["cross-exam", "--mode", "iterative", "test topic"])
-        # Should not fail with "no such option"
-        assert "no such option" not in (result.output or "").lower()
+        import sys
+        from three_surgeons.core.cross_exam import CrossExamResult
+
+        mock_result = CrossExamResult(
+            topic="test topic",
+            cardiologist_report="Cardio",
+            neurologist_report="Neuro",
+            synthesis="Synthesis",
+            total_cost=0.0,
+            total_latency_ms=100,
+        )
+
+        cli_main_mod = sys.modules["three_surgeons.cli.main"]
+        with patch.object(cli_main_mod, "LLMProvider"), \
+             patch.object(cli_main_mod, "EvidenceStore"), \
+             patch("three_surgeons.core.cross_exam.SurgeryTeam.cross_examine_iterative", return_value=mock_result):
+            runner = CliRunner()
+            result = runner.invoke(cli, ["cross-exam", "--mode", "iterative", "test topic"])
+            # Should not fail with "no such option"
+            assert "no such option" not in (result.output or "").lower()
 
     def test_mode_flag_default_is_single(self, tmp_path, monkeypatch):
-        runner = CliRunner()
-        result = runner.invoke(cli, ["cross-exam", "test topic"])
-        assert "no such option" not in (result.output or "").lower()
+        import sys
+        from three_surgeons.core.cross_exam import CrossExamResult
+
+        mock_result = CrossExamResult(
+            topic="test topic",
+            cardiologist_report="Cardio",
+            neurologist_report="Neuro",
+            synthesis="Synthesis",
+            total_cost=0.0,
+            total_latency_ms=100,
+        )
+
+        cli_main_mod = sys.modules["three_surgeons.cli.main"]
+        with patch.object(cli_main_mod, "LLMProvider"), \
+             patch.object(cli_main_mod, "EvidenceStore"), \
+             patch("three_surgeons.core.cross_exam.SurgeryTeam.cross_examine_iterative", return_value=mock_result):
+            runner = CliRunner()
+            result = runner.invoke(cli, ["cross-exam", "test topic"])
+            assert "no such option" not in (result.output or "").lower()
 
 
 class TestModeCommand:
@@ -238,6 +269,32 @@ class TestReviewWeightsCommand:
         out_file = str(tmp_path / "weights.json")
         result = runner.invoke(cli, ["review-weights", "export", "--output", out_file])
         assert result.exit_code == 0
+
+
+class TestServeCommand:
+    """Test the 3s serve command."""
+
+    def test_serve_command_exists(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["serve", "--help"])
+        assert result.exit_code == 0
+        assert "Start the 3-Surgeons HTTP server" in result.output
+
+    def test_serve_default_port(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["serve", "--help"])
+        assert "3456" in result.output
+
+    @patch("three_surgeons.cli.main.uvicorn", create=True)
+    @patch("three_surgeons.cli.main.create_app", create=True)
+    def test_serve_invokes_uvicorn(self, mock_create_app, mock_uvicorn) -> None:
+        mock_app = MagicMock()
+        mock_create_app.return_value = mock_app
+        runner = CliRunner()
+        result = runner.invoke(cli, ["serve"])
+        assert result.exit_code == 0
+        mock_create_app.assert_called_once()
+        mock_uvicorn.run.assert_called_once_with(mock_app, host="127.0.0.1", port=3456)
 
 
 class TestMainEntryPoint:
