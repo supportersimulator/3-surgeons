@@ -12,12 +12,27 @@ import json
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Protocol
+from typing import List, Optional, Protocol
 
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.state import StateBackend
 
 logger = logging.getLogger(__name__)
+
+
+def _read_file_context(file_paths: Optional[List[str]]) -> str:
+    """Read files and format as context string for LLM prompts."""
+    if not file_paths:
+        return ""
+    parts: List[str] = ["Relevant source files:"]
+    for fp in file_paths:
+        try:
+            with open(fp, "r") as f:
+                content = f.read()
+            parts.append(f"--- {fp} ---\n{content}")
+        except (OSError, IOError):
+            continue
+    return "\n".join(parts) if len(parts) > 1 else ""
 
 
 class LLMProviderLike(Protocol):
@@ -206,12 +221,15 @@ class SurgeryTeam:
 
     # ── consult ──────────────────────────────────────────────────────
 
-    def consult(self, topic: str) -> CrossExamResult:
+    def consult(self, topic: str, file_paths: Optional[List[str]] = None) -> CrossExamResult:
         """Quick parallel query to both surgeons. Returns raw analyses.
 
         No cross-examination or synthesis -- just independent opinions.
         Logs result in evidence store.
         """
+        file_context = _read_file_context(file_paths)
+        if file_context:
+            topic = f"{topic}\n\n{file_context}"
         result = CrossExamResult(topic=topic)
 
         # Query cardiologist
@@ -252,7 +270,7 @@ class SurgeryTeam:
     # ── cross_examine ────────────────────────────────────────────────
 
     def cross_examine(
-        self, topic: str, depth: str = "full"
+        self, topic: str, depth: str = "full", file_paths: Optional[List[str]] = None
     ) -> CrossExamResult:
         """Deep multi-phase evaluation.
 
@@ -264,6 +282,9 @@ class SurgeryTeam:
         Handles model failures gracefully -- one surgeon failing does not
         crash the entire operation.
         """
+        file_context = _read_file_context(file_paths)
+        if file_context:
+            topic = f"{topic}\n\n{file_context}"
         result = CrossExamResult(topic=topic)
 
         # ── Phase 1: Independent analysis ────────────────────────────
@@ -442,6 +463,7 @@ class SurgeryTeam:
         mode: ReviewMode = ReviewMode.SINGLE,
         consensus_threshold: float = 0.7,
         depth: str = "full",
+        file_paths: Optional[List[str]] = None,
     ) -> CrossExamResult:
         """Iterative cross-examination that loops until consensus or max iterations.
 
@@ -472,7 +494,7 @@ class SurgeryTeam:
                     f"{prior}"
                 )
 
-            result = self.cross_examine(iter_topic, depth=depth)
+            result = self.cross_examine(iter_topic, depth=depth, file_paths=file_paths)
             total_cost += result.total_cost
 
             # Accumulate findings for next iteration

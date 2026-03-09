@@ -15,6 +15,7 @@ from three_surgeons.core.cross_exam import (
     CrossExamResult,
     ReviewMode,
     SurgeryTeam,
+    _read_file_context,
 )
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.models import LLMResponse
@@ -413,3 +414,134 @@ class TestEvidenceLogging:
         # Check that cost was tracked for at least the cardiologist
         daily = mock_team._evidence.get_daily_cost("cardiologist")
         assert daily > 0
+
+
+class TestReadFileContext:
+    """Unit tests for _read_file_context helper."""
+
+    def test_returns_empty_for_none(self):
+        assert _read_file_context(None) == ""
+
+    def test_returns_empty_for_empty_list(self):
+        assert _read_file_context([]) == ""
+
+    def test_reads_file_content(self, tmp_path):
+        f = tmp_path / "hello.py"
+        f.write_text("print('hello')\n")
+        result = _read_file_context([str(f)])
+        assert "Relevant source files:" in result
+        assert "print('hello')" in result
+        assert str(f) in result
+
+    def test_skips_missing_files(self):
+        result = _read_file_context(["/nonexistent/path.py"])
+        assert result == ""
+
+    def test_skips_missing_includes_existing(self, tmp_path):
+        f = tmp_path / "real.py"
+        f.write_text("x = 1\n")
+        result = _read_file_context(["/nonexistent/path.py", str(f)])
+        assert "x = 1" in result
+
+
+class TestCrossExamineWithFiles:
+    """cross_examine with file_paths parameter."""
+
+    def test_cross_examine_includes_file_content_in_topic(self, tmp_path):
+        """When file_paths provided, file contents are appended to the topic."""
+        test_file = tmp_path / "example.py"
+        test_file.write_text("class Foo:\n    pass\n")
+
+        cardio = MagicMock()
+        neuro = MagicMock()
+        mock_resp = LLMResponse(
+            ok=True, content="analysis", latency_ms=100,
+            model="test", cost_usd=0.001,
+        )
+        cardio.query.return_value = mock_resp
+        neuro.query.return_value = mock_resp
+
+        evidence = EvidenceStore(str(tmp_path / "evidence.db"))
+        team = SurgeryTeam(
+            cardiologist=cardio,
+            neurologist=neuro,
+            evidence=evidence,
+            state=MemoryBackend(),
+        )
+        team.cross_examine("test", file_paths=[str(test_file)])
+
+        # Verify file content appeared in at least one query
+        all_prompts = " ".join(
+            str(call) for call in cardio.query.call_args_list
+        )
+        assert "class Foo" in all_prompts
+
+    def test_missing_file_skipped_gracefully(self, tmp_path):
+        """Non-existent file_paths don't crash."""
+        cardio = MagicMock()
+        neuro = MagicMock()
+        mock_resp = LLMResponse(
+            ok=True, content="analysis", latency_ms=50,
+            model="test", cost_usd=0.0,
+        )
+        cardio.query.return_value = mock_resp
+        neuro.query.return_value = mock_resp
+
+        evidence = EvidenceStore(str(tmp_path / "evidence.db"))
+        team = SurgeryTeam(
+            cardiologist=cardio,
+            neurologist=neuro,
+            evidence=evidence,
+            state=MemoryBackend(),
+        )
+        result = team.cross_examine("test", file_paths=["/nonexistent/file.py"])
+        assert result.topic == "test"
+
+    def test_no_file_paths_backward_compatible(self, tmp_path):
+        """Not passing file_paths works exactly as before."""
+        cardio = MagicMock()
+        neuro = MagicMock()
+        mock_resp = LLMResponse(
+            ok=True, content="analysis", latency_ms=50,
+            model="test", cost_usd=0.0,
+        )
+        cardio.query.return_value = mock_resp
+        neuro.query.return_value = mock_resp
+
+        evidence = EvidenceStore(str(tmp_path / "evidence.db"))
+        team = SurgeryTeam(
+            cardiologist=cardio,
+            neurologist=neuro,
+            evidence=evidence,
+            state=MemoryBackend(),
+        )
+        result = team.cross_examine("test topic")
+        assert result.topic == "test topic"
+
+    def test_consult_with_file_paths(self, tmp_path):
+        """Consult also supports file_paths."""
+        test_file = tmp_path / "code.py"
+        test_file.write_text("def bar(): return 42\n")
+
+        cardio = MagicMock()
+        neuro = MagicMock()
+        mock_resp = LLMResponse(
+            ok=True, content="analysis", latency_ms=50,
+            model="test", cost_usd=0.0,
+        )
+        cardio.query.return_value = mock_resp
+        neuro.query.return_value = mock_resp
+
+        evidence = EvidenceStore(str(tmp_path / "evidence.db"))
+        team = SurgeryTeam(
+            cardiologist=cardio,
+            neurologist=neuro,
+            evidence=evidence,
+            state=MemoryBackend(),
+        )
+        team.consult("review this", file_paths=[str(test_file)])
+
+        all_prompts = " ".join(
+            str(call) for call in cardio.query.call_args_list
+        )
+        assert "def bar" in all_prompts
