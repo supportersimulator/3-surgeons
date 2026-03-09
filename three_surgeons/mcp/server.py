@@ -10,6 +10,7 @@ Run: python -m three_surgeons.mcp.server
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from three_surgeons.core.ab_testing import ABTestEngine
@@ -30,6 +31,24 @@ logger = logging.getLogger(__name__)
 
 def _make_neuro(config: Config) -> LLMProvider:
     """Create neurologist LLMProvider with GPU lock for local providers."""
+    # ContextDNA ecosystem: use priority queue adapter (Redis GPU lock + hybrid routing)
+    if os.environ.get("CONTEXTDNA_ADAPTER"):
+        try:
+            from context_dna.adapters import create_adapter
+
+            adapter = create_adapter(
+                priority=os.environ.get("CONTEXTDNA_LLM_PRIORITY", "ATLAS"),
+                caller="3surgeons_neuro",
+            )
+            logger.info("Using ContextDNA priority queue adapter for neurologist")
+            return LLMProvider(config.neurologist, query_adapter=adapter)
+        except ImportError:
+            logger.warning(
+                "CONTEXTDNA_ADAPTER set but context_dna.adapters not importable; "
+                "falling back"
+            )
+
+    # Standalone: file-based GPU lock for local providers
     if config.neurologist.provider in ("ollama", "mlx", "local", "vllm", "lmstudio"):
         from pathlib import Path
 
