@@ -52,6 +52,13 @@ for PY in python3 python; do
     fi
 done
 
-echo "Error: Cannot find Python >=3.10 with mcp and three_surgeons installed." >&2
-echo "Run: cd ${PLUGIN_ROOT} && python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'" >&2
+# --- No runtime found — structured error output ---
+cat >&2 <<DIAG
+{
+  "code": "3S-MCP-MISS",
+  "passed": false,
+  "message": "Cannot find Python >=3.10 with mcp and three_surgeons installed",
+  "fix": "cd ${PLUGIN_ROOT} && python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'"
+}
+DIAG
 exit 1
