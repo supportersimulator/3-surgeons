@@ -190,6 +190,18 @@ class TestErrorHandling:
         data = resp.json()
         assert "error" in data
         assert "RuntimeError" in data["error"]
+        # Internal message should NOT leak
+        assert "LLM connection failed" not in data["error"]
+
+    @patch("three_surgeons.mcp.server._probe")
+    def test_500_does_not_leak_internal_details(self, mock_probe, client):
+        mock_probe.side_effect = RuntimeError("secret DB password in traceback")
+        resp = client.post("/tool/probe")
+        assert resp.status_code == 500
+        data = resp.json()
+        assert "error" in data
+        assert "secret DB password" not in data["error"]
+        assert "Tool execution failed" in data["error"]
 
     @patch("three_surgeons.mcp.server._consult")
     def test_tool_error_includes_type(self, mock_consult, client):

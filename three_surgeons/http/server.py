@@ -152,7 +152,7 @@ async def invoke_tool(request: Request) -> JSONResponse:
     except Exception as exc:
         logger.error("Tool %s failed: %s", name, exc, exc_info=True)
         return JSONResponse(
-            {"error": f"Tool execution failed: {type(exc).__name__}: {exc}"},
+            {"error": f"Tool execution failed: {type(exc).__name__}"},
             status_code=500,
         )
 
