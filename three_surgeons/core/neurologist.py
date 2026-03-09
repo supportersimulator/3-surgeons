@@ -153,6 +153,7 @@ def neurologist_challenge(
     topic: str,
     neurologist: Any,
     evidence_store: Any = None,
+    file_paths: Optional[List[str]] = None,
 ) -> ChallengeResult:
     """Run corrigibility skeptic challenge on a topic.
 
@@ -161,6 +162,21 @@ def neurologist_challenge(
     """
     # Gather context
     context_parts: List[str] = []
+
+    # File context
+    if file_paths:
+        file_contents: List[str] = []
+        for fp in file_paths:
+            try:
+                with open(fp, "r") as f:
+                    content = f.read()
+                file_contents.append(f"--- {fp} ---\n{content}")
+            except (OSError, IOError):
+                continue
+        if file_contents:
+            context_parts.append("Relevant source files:")
+            context_parts.extend(file_contents)
+
     if evidence_store is not None:
         try:
             results = evidence_store.search(topic, limit=5)

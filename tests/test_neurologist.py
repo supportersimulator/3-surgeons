@@ -301,3 +301,52 @@ class TestIntrospect:
         results = introspect(providers)
         assert len(results) == 2
         assert all(r.ok for r in results.values())
+
+
+# ── neurologist_challenge with file_paths ───────────────────────────
+
+
+class TestNeurologistChallengeWithFiles:
+    """neurologist_challenge with file_paths parameter."""
+
+    def test_file_content_included_in_prompt(self, tmp_path):
+        """When file_paths provided, file contents appear in the prompt."""
+        test_file = tmp_path / "example.py"
+        test_file.write_text("def foo():\n    return 42\n")
+
+        mock_neuro = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.content = '[]'
+        mock_neuro.query.return_value = mock_resp
+
+        neurologist_challenge("test topic", mock_neuro, file_paths=[str(test_file)])
+
+        call_kwargs = mock_neuro.query.call_args
+        prompt = call_kwargs.kwargs.get("prompt", call_kwargs[1].get("prompt", ""))
+        assert "def foo():" in prompt
+        assert "example.py" in prompt
+
+    def test_missing_file_skipped_gracefully(self):
+        """Non-existent file_paths don't crash."""
+        mock_neuro = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.content = '[]'
+        mock_neuro.query.return_value = mock_resp
+
+        result = neurologist_challenge(
+            "test topic", mock_neuro, file_paths=["/nonexistent/file.py"]
+        )
+        assert result.topic == "test topic"
+
+    def test_file_paths_none_is_backward_compatible(self):
+        """Not passing file_paths works exactly as before."""
+        mock_neuro = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.ok = True
+        mock_resp.content = '[]'
+        mock_neuro.query.return_value = mock_resp
+
+        result = neurologist_challenge("test topic", mock_neuro)
+        assert result.topic == "test topic"
