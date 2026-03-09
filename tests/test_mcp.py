@@ -298,7 +298,7 @@ class TestToolDelegation:
 
             result = _consult("test topic")
 
-            mock_team_fn.return_value.consult.assert_called_once_with("test topic")
+            mock_team_fn.return_value.consult.assert_called_once_with("test topic", file_paths=None)
             assert isinstance(result, dict)
             assert result["topic"] == "test topic"
 
@@ -327,7 +327,7 @@ class TestToolDelegation:
 
             from three_surgeons.core.cross_exam import ReviewMode
             mock_team_fn.return_value.cross_examine_iterative.assert_called_once_with(
-                "deep topic", mode=ReviewMode.SINGLE, depth="full"
+                "deep topic", mode=ReviewMode.SINGLE, depth="full", file_paths=None
             )
             assert isinstance(result, dict)
             assert "synthesis" in result

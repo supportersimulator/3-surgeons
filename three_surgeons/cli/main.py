@@ -246,8 +246,9 @@ def probe(ctx: click.Context) -> None:
     default=None,
     help="Review loop depth: single (1 pass), iterative (up to 3), continuous (up to 5).",
 )
+@click.option("--files", "-f", multiple=True, help="File paths to include as context")
 @click.pass_context
-def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str]) -> None:
+def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str], files: tuple) -> None:
     """Full cross-examination protocol."""
     from three_surgeons.core.cross_exam import ReviewMode, SurgeryTeam
 
@@ -265,8 +266,9 @@ def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str]) -> No
         review_mode or config.review.depth
     )
 
+    file_paths = list(files) if files else None
     click.echo(f"Cross-examining ({mode.value} mode, max {mode.max_iterations} iterations): {topic}\n")
-    result = team.cross_examine_iterative(topic, mode=mode)
+    result = team.cross_examine_iterative(topic, mode=mode, file_paths=file_paths)
 
     # Surface degradation warnings
     for warning in result.warnings:
@@ -417,8 +419,9 @@ def weights_import(ctx: click.Context, input_file: str) -> None:
 
 @cli.command()
 @click.argument("topic")
+@click.option("--files", "-f", multiple=True, help="File paths to include as context")
 @click.pass_context
-def consult(ctx: click.Context, topic: str) -> None:
+def consult(ctx: click.Context, topic: str, files: tuple) -> None:
     """Quick consult with both surgeons."""
     from three_surgeons.core.cross_exam import SurgeryTeam
 
@@ -431,8 +434,9 @@ def consult(ctx: click.Context, topic: str) -> None:
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
     )
 
+    file_paths = list(files) if files else None
     click.echo(f"Consulting on: {topic}\n")
-    result = team.consult(topic)
+    result = team.consult(topic, file_paths=file_paths)
 
     # Surface degradation warnings
     for warning in result.warnings:
@@ -686,8 +690,9 @@ def ask_remote_cmd(ctx: click.Context, prompt: str) -> None:
 @cli.command("cardio-review")
 @click.argument("topic")
 @click.option("--git-context", default=None, help="Recent git changes context")
+@click.option("--files", "-f", multiple=True, help="File paths to include as context")
 @click.pass_context
-def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str) -> None:
+def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str, files: tuple) -> None:
     """Cardiologist cross-examination review."""
     from three_surgeons.core.cardio import cardio_review
     from three_surgeons.core.cross_exam import SurgeryTeam
@@ -699,8 +704,9 @@ def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str) -> None:
     neuro = _make_neuro(config)
     team = SurgeryTeam(cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state)
 
+    file_paths = list(files) if files else None
     click.echo(f"Cardio review: {topic}\n")
-    result = cardio_review(topic, team, evidence_store=evidence, git_context=git_context)
+    result = cardio_review(topic, team, evidence_store=evidence, git_context=git_context, file_paths=file_paths)
 
     click.echo("--- Cardiologist ---")
     click.echo(result.cardiologist_findings)

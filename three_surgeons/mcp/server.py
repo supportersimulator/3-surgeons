@@ -142,17 +142,18 @@ def _probe() -> dict:
     return results
 
 
-def _cross_examine(topic: str, depth: str = "full", mode: str = "single") -> dict:
+def _cross_examine(topic: str, depth: str = "full", mode: str = "single", file_paths: Optional[list] = None) -> dict:
     """Full cross-examination protocol with iterative review support.
 
     Args:
         topic: The topic to cross-examine.
         depth: Depth of analysis ("full" or "quick").
         mode: Review mode — "single" (1 pass), "iterative" (up to 3), "continuous" (up to 5).
+        file_paths: Optional list of file paths to include as context.
     """
     team = _build_surgery_team()
     parsed_mode = ReviewMode.from_string(mode)
-    result = team.cross_examine_iterative(topic, mode=parsed_mode, depth=depth)
+    result = team.cross_examine_iterative(topic, mode=parsed_mode, depth=depth, file_paths=file_paths)
     return {
         "topic": result.topic,
         "cardiologist_report": result.cardiologist_report,
@@ -169,10 +170,10 @@ def _cross_examine(topic: str, depth: str = "full", mode: str = "single") -> dic
     }
 
 
-def _consult(topic: str) -> dict:
+def _consult(topic: str, file_paths: Optional[list] = None) -> dict:
     """Quick consult with both surgeons."""
     team = _build_surgery_team()
-    result = team.consult(topic)
+    result = team.consult(topic, file_paths=file_paths)
     return {
         "topic": result.topic,
         "cardiologist_report": result.cardiologist_report,
@@ -375,11 +376,11 @@ def _ask_remote_impl(prompt: str) -> dict:
     return {"ok": resp.ok, "content": resp.content, "cost_usd": resp.cost_usd}
 
 
-def _cardio_review_impl(topic: str, git_context: Optional[str] = None) -> dict:
+def _cardio_review_impl(topic: str, git_context: Optional[str] = None, file_paths: Optional[list] = None) -> dict:
     """Cardiologist cross-examination review."""
     team = _build_surgery_team()
     evidence = _build_evidence()
-    result = cardio_review(topic, team, evidence_store=evidence, git_context=git_context)
+    result = cardio_review(topic, team, evidence_store=evidence, git_context=git_context, file_paths=file_paths)
     return {
         "topic": result.topic,
         "cardiologist_findings": result.cardiologist_findings,
@@ -429,14 +430,14 @@ try:
         return _probe()
 
     @_mcp_app.tool()
-    def cross_examine(topic: str, depth: str = "full", mode: str = "single") -> dict:
+    def cross_examine(topic: str, depth: str = "full", mode: str = "single", file_paths: list | None = None) -> dict:
         """Full cross-examination protocol with iterative review support."""
-        return _cross_examine(topic, depth=depth, mode=mode)
+        return _cross_examine(topic, depth=depth, mode=mode, file_paths=file_paths)
 
     @_mcp_app.tool()
-    def consult(topic: str) -> dict:
+    def consult(topic: str, file_paths: list | None = None) -> dict:
         """Quick consult with both surgeons."""
-        return _consult(topic)
+        return _consult(topic, file_paths=file_paths)
 
     @_mcp_app.tool()
     def consensus(claim: str) -> dict:
@@ -506,9 +507,9 @@ try:
         return _ask_remote_impl(prompt)
 
     @_mcp_app.tool()
-    def cardio_review_tool(topic: str, git_context: str = "") -> dict:
+    def cardio_review_tool(topic: str, git_context: str = "", file_paths: list | None = None) -> dict:
         """Cardiologist cross-examination review."""
-        return _cardio_review_impl(topic, git_context=git_context or None)
+        return _cardio_review_impl(topic, git_context=git_context or None, file_paths=file_paths)
 
     @_mcp_app.tool()
     def ab_validate_tool(description: str) -> dict:

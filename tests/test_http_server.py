@@ -121,7 +121,7 @@ class TestToolInvocation:
         )
         assert resp.status_code == 200
         mock_xe.assert_called_once_with(
-            topic="test topic", depth="quick", mode="iterative",
+            topic="test topic", depth="quick", mode="iterative", file_paths=None,
         )
 
     @patch("three_surgeons.mcp.server._cross_examine")
@@ -133,7 +133,7 @@ class TestToolInvocation:
         )
         assert resp.status_code == 200
         mock_xe.assert_called_once_with(
-            topic="test topic", depth="full", mode="single",
+            topic="test topic", depth="full", mode="single", file_paths=None,
         )
 
     @patch("three_surgeons.mcp.server._consult")
@@ -142,7 +142,7 @@ class TestToolInvocation:
         resp = client.post("/tool/consult", json={"topic": "design"})
         assert resp.status_code == 200
         assert resp.json()["topic"] == "design"
-        mock_consult.assert_called_once_with(topic="design")
+        mock_consult.assert_called_once_with(topic="design", file_paths=None)
 
     @patch("three_surgeons.mcp.server._consensus")
     def test_consensus_invocation(self, mock_consensus, client):

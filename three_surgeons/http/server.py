@@ -52,6 +52,7 @@ BASE_TOOLS: dict[str, ToolSpec] = {
             "topic": {"type": "string", "required": True},
             "depth": {"type": "string", "required": False, "default": "full"},
             "mode": {"type": "string", "required": False, "default": "single"},
+            "file_paths": {"type": "array", "required": False, "default": None},
         },
     },
     "consult": {
@@ -59,6 +60,7 @@ BASE_TOOLS: dict[str, ToolSpec] = {
         "description": "Quick consult with both surgeons",
         "params": {
             "topic": {"type": "string", "required": True},
+            "file_paths": {"type": "array", "required": False, "default": None},
         },
     },
     "consensus": {
