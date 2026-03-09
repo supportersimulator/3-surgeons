@@ -352,6 +352,11 @@ def setup_check(ctx: click.Context) -> None:
     all_ok = all(s["ping_ok"] for s in results["surgeons"].values())
     results["status"] = "operational" if all_ok else "degraded"
 
+    # Structured diagnostics (3S-* codes)
+    from three_surgeons.core.diagnostics import run_all_checks
+    diag_results = run_all_checks()
+    results["diagnostics"] = [r.to_dict() for r in diag_results]
+
     click.echo(_json.dumps(results, indent=2))
 
     if not all_ok:

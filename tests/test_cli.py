@@ -338,6 +338,33 @@ class TestDoctorCommand:
             assert "fix" in check, f"Failed check {check['code']} missing fix hint"
 
 
+class TestSetupCheckDiagnostics:
+    """Verify setup-check now includes 3S- codes."""
+
+    def test_setup_check_includes_codes(self) -> None:
+        import json
+        runner = CliRunner()
+        result = runner.invoke(cli, ["setup-check"])
+        # Extract the JSON object from output (guidance text may follow)
+        raw = result.output
+        # Find the outermost JSON object: first '{' to its matching '}'
+        start = raw.index("{")
+        depth = 0
+        end = start
+        for i, ch in enumerate(raw[start:], start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i
+                    break
+        data = json.loads(raw[start:end + 1])
+        assert "diagnostics" in data
+        for d in data["diagnostics"]:
+            assert d["code"].startswith("3S-")
+
+
 class TestMainEntryPoint:
     """Test that the main() function exists and is callable."""
 
