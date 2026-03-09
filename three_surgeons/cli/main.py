@@ -572,17 +572,30 @@ def neurologist_pulse_cmd(ctx: click.Context) -> None:
 
 @cli.command("neurologist-challenge")
 @click.argument("topic")
+@click.option("--files", "-f", multiple=True, help="File paths to include as context")
+@click.option("--rounds", "-r", default=1, type=int, help="Number of iterative rounds (1-3)")
 @click.pass_context
-def neurologist_challenge_cmd(ctx: click.Context, topic: str) -> None:
+def neurologist_challenge_cmd(ctx: click.Context, topic: str, files: tuple, rounds: int) -> None:
     """Corrigibility skeptic challenge on a topic."""
     from three_surgeons.core.neurologist import neurologist_challenge
 
     config: Config = ctx.obj["config"]
     neuro = _make_neuro(config)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
+    file_paths = list(files) if files else None
 
     click.echo(f"Challenging: {topic}\n")
-    result = neurologist_challenge(topic, neuro, evidence_store=evidence)
+
+    if rounds > 1:
+        from three_surgeons.core.neurologist import neurologist_challenge_iterative
+
+        result = neurologist_challenge_iterative(
+            topic, neuro, evidence_store=evidence,
+            file_paths=file_paths, rounds=min(rounds, 3),
+        )
+        click.echo(f"Iterations: {result.iteration_count}")
+    else:
+        result = neurologist_challenge(topic, neuro, evidence_store=evidence, file_paths=file_paths)
 
     if result.challenges:
         for c in result.challenges:

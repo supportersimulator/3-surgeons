@@ -300,24 +300,38 @@ def _neurologist_pulse_impl() -> dict:
     }
 
 
-def _neurologist_challenge_impl(topic: str) -> dict:
+def _neurologist_challenge_impl(topic: str, file_paths: Optional[list] = None, rounds: int = 1) -> dict:
     """Corrigibility skeptic challenge."""
     config = _build_config()
     neuro = _make_neuro(config)
     evidence = _build_evidence(config)
-    result = neurologist_challenge(topic, neuro, evidence_store=evidence)
-    return {
-        "topic": result.topic,
-        "challenges": [
-            {
-                "claim": c.claim,
-                "challenge": c.challenge,
-                "severity": c.severity,
-                "suggested_test": c.suggested_test,
-            }
-            for c in result.challenges
-        ],
-    }
+
+    if rounds > 1:
+        from three_surgeons.core.neurologist import neurologist_challenge_iterative
+
+        result = neurologist_challenge_iterative(
+            topic, neuro, evidence_store=evidence,
+            file_paths=file_paths, rounds=min(rounds, 3),
+        )
+        return {
+            "topic": result.topic,
+            "challenges": [
+                {"claim": c.claim, "challenge": c.challenge,
+                 "severity": c.severity, "suggested_test": c.suggested_test}
+                for c in result.challenges
+            ],
+            "iteration_count": result.iteration_count,
+        }
+    else:
+        result = neurologist_challenge(topic, neuro, evidence_store=evidence, file_paths=file_paths)
+        return {
+            "topic": result.topic,
+            "challenges": [
+                {"claim": c.claim, "challenge": c.challenge,
+                 "severity": c.severity, "suggested_test": c.suggested_test}
+                for c in result.challenges
+            ],
+        }
 
 
 def _introspect_impl() -> dict:
@@ -472,9 +486,9 @@ try:
         return _neurologist_pulse_impl()
 
     @_mcp_app.tool()
-    def neurologist_challenge_tool(topic: str) -> dict:
+    def neurologist_challenge_tool(topic: str, file_paths: list | None = None, rounds: int = 1) -> dict:
         """Corrigibility skeptic challenge on a topic."""
-        return _neurologist_challenge_impl(topic)
+        return _neurologist_challenge_impl(topic, file_paths=file_paths, rounds=rounds)
 
     @_mcp_app.tool()
     def introspect_tool() -> dict:
