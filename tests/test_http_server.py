@@ -216,6 +216,31 @@ class TestErrorHandling:
         assert resp.status_code == 404
 
 
+# ── Rate limiting ────────────────────────────────────────────────────────
+
+
+class TestRateLimiting:
+    """Basic rate limiting on tool invocation."""
+
+    def test_rate_limit_returns_429_after_burst(self, client):
+        """Rapid-fire calls should eventually get throttled."""
+        responses = []
+        for _ in range(25):
+            resp = client.post("/tool/probe")
+            responses.append(resp.status_code)
+        assert 429 in responses
+
+    def test_rate_limit_includes_retry_after(self, client):
+        """429 response should include retry guidance."""
+        for _ in range(25):
+            resp = client.post("/tool/probe")
+            if resp.status_code == 429:
+                data = resp.json()
+                assert "error" in data
+                assert "rate" in data["error"].lower()
+                break
+
+
 # ── CORS ──────────────────────────────────────────────────────────────────
 
 

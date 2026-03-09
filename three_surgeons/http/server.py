@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time as _time
+from collections import defaultdict
 from typing import Any, Callable
 
 from starlette.applications import Starlette
@@ -89,6 +91,27 @@ def _validate_params(tool_spec: ToolSpec, body: dict) -> dict[str, Any]:
     return kwargs
 
 
+# ── Rate limiting ────────────────────────────────────────────────────────
+
+
+class _RateLimiter:
+    """Simple per-tool token bucket rate limiter."""
+
+    def __init__(self, max_calls: int = 20, window_s: float = 60.0):
+        self.max_calls = max_calls
+        self.window_s = window_s
+        self._calls: dict[str, list[float]] = defaultdict(list)
+
+    def allow(self, key: str) -> bool:
+        now = _time.monotonic()
+        calls = self._calls[key]
+        self._calls[key] = [t for t in calls if now - t < self.window_s]
+        if len(self._calls[key]) >= self.max_calls:
+            return False
+        self._calls[key].append(now)
+        return True
+
+
 # ── Route handlers ───────────────────────────────────────────────────────
 
 
@@ -146,6 +169,13 @@ async def invoke_tool(request: Request) -> JSONResponse:
             status_code=400,
         )
 
+    # Rate limit
+    if not request.app.state.rate_limiter.allow(name):
+        return JSONResponse(
+            {"error": "Rate limit exceeded. Try again shortly."},
+            status_code=429,
+        )
+
     # Invoke tool
     try:
         result = fn(**kwargs)
@@ -167,6 +197,8 @@ def create_app() -> Starlette:
         Route("/tools", tools, methods=["GET"]),
         Route("/tool/{name}", invoke_tool, methods=["POST"]),
     ])
+
+    app.state.rate_limiter = _RateLimiter()
 
     app.add_middleware(
         CORSMiddleware,
