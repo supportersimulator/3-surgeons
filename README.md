@@ -12,6 +12,24 @@ Claude may confabulate confidently where GPT hedges. A local model catches patte
 | **Cardiologist** | External perspective, cross-examination | GPT-4.1-mini (OpenAI) |
 | **Neurologist** | Pattern recognition, corrigibility checks | Qwen3-4B (Ollama) |
 
+## Prerequisites
+
+**Python 3.10+** is required for the MCP server (cross-examination tools in your IDE).
+
+```bash
+# Check your version
+python3 --version
+
+# If below 3.10, install via Homebrew (macOS)
+brew install python@3.12
+
+# Or via pyenv (any platform)
+pyenv install 3.12
+pyenv global 3.12
+```
+
+The `3s init` wizard will check your Python version and guide you if it's too old.
+
 ## Install
 
 ### Claude Code (Marketplace)
@@ -24,18 +42,50 @@ Claude may confabulate confidently where GPT hedges. A local model catches patte
 
 ### VS Code (Agent Plugin — requires 1.110+)
 
-1. Install **GitHub Copilot Chat** extension (not the legacy "GitHub Copilot" extension)
-2. Sign into GitHub in VS Code (Copilot-entitled account)
-3. Open Settings (`Cmd+,` / `Ctrl+,`):
-   - Set `chat.plugins.enabled` → `true`
-   - Add to `chat.plugins.marketplaces` → `supportersimulator/3-surgeons`
-4. Reload window, open Chat panel, type `@agentPlugins` to verify
+> **Important:** This uses VS Code's Agent Plugin system (Chat panel), NOT the traditional Extension Marketplace. You will NOT find it by searching in the Extensions sidebar.
 
-**Local fallback** (if marketplace doesn't resolve):
+**Step 1: Install GitHub Copilot Chat**
+
+Install the **GitHub Copilot Chat** extension from the VS Code Marketplace (not the legacy "GitHub Copilot" extension). Sign into GitHub with a Copilot-entitled account.
+
+**Step 2: Enable plugins and add the marketplace**
+
+Open Settings (`Cmd+,` / `Ctrl+,`) and add these to your `settings.json`:
+
+```json
+{
+  "chat.plugins.enabled": true,
+  "chat.plugins.marketplaces": ["supportersimulator/3-surgeons"]
+}
+```
+
+**Step 3: Reload and verify**
+
+1. Reload window (`Cmd+Shift+P` → "Developer: Reload Window")
+2. Open the **Chat panel** (not Extensions sidebar)
+3. Type `@agentPlugins` to verify the plugin appears
+
+**Step 4: Set up the Python runtime**
+
+The MCP tools need Python 3.10+ with the package installed:
+
 ```bash
 git clone https://github.com/supportersimulator/3-surgeons.git ~/3-surgeons
+cd ~/3-surgeons
+python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'
 ```
-Then add the absolute path in `chat.plugins.paths`.
+
+**Local path fallback** (if marketplace discovery doesn't resolve):
+
+Add the cloned path directly in `settings.json`:
+
+```json
+{
+  "chat.plugins.paths": {
+    "/Users/you/3-surgeons": true
+  }
+}
+```
 
 ### Cursor
 
@@ -48,7 +98,7 @@ cursor plugin add supportersimulator/3-surgeons
 ```bash
 git clone https://github.com/supportersimulator/3-surgeons.git ~/.claude/plugins/3-surgeons
 cd ~/.claude/plugins/3-surgeons
-python -m venv .venv && .venv/bin/pip install -e .
+python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'
 ```
 
 ## Quick Start

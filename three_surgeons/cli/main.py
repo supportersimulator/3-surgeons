@@ -44,11 +44,32 @@ def cli(ctx: click.Context) -> None:
 def init(detect: bool) -> None:
     """Interactive setup wizard."""
     import shutil
+    import sys
 
     from three_surgeons.core.config import detect_local_backend
 
     click.echo("3-Surgeons Setup Wizard")
     click.echo("=" * 40)
+
+    # Python version check — MCP server requires 3.10+
+    py_version = sys.version_info
+    click.echo(f"\nPython: {py_version.major}.{py_version.minor}.{py_version.micro}")
+    if py_version < (3, 10):
+        click.echo(
+            "\n  WARNING: Python 3.10+ is required for the MCP server (IDE tools).\n"
+            f"  You have Python {py_version.major}.{py_version.minor}.\n"
+        )
+        click.echo("  Install a newer Python:")
+        click.echo("    macOS:   brew install python@3.12")
+        click.echo("    pyenv:   pyenv install 3.12 && pyenv global 3.12")
+        click.echo("    Ubuntu:  sudo apt install python3.12 python3.12-venv")
+        click.echo("    Windows: winget install Python.Python.3.12")
+        click.echo(
+            "\n  After installing, recreate the venv:"
+            "\n    python3.12 -m venv .venv && .venv/bin/pip install -e '.[mcp]'"
+        )
+        if not click.confirm("\n  Continue setup anyway? (skills work without MCP)", default=True):
+            raise SystemExit(1)
 
     # Auto-detect local backends
     click.echo("\nScanning for local LLM backends...")
