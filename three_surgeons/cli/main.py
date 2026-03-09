@@ -403,7 +403,6 @@ def doctor(ctx: click.Context, json_mode: bool) -> None:
     from three_surgeons.core.diagnostics import run_all_checks
 
     results = run_all_checks()
-    passed = [r for r in results if r.passed]
     failed = [r for r in results if not r.passed]
 
     if json_mode:
