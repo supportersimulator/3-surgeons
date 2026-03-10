@@ -2,17 +2,23 @@
 """Tests for the upgrade adaptability engine."""
 from __future__ import annotations
 
+import json
+import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
+import yaml
 
 from three_surgeons.core.upgrade import (
     ConfigTracker,
     EcosystemProbe,
     ProbeResult,
     InfraCapability,
+    UpgradeTransaction,
+    TransactionStatus,
 )
+from three_surgeons.core.config import Config
 
 
 class TestInfraCapability:
@@ -121,3 +127,83 @@ class TestConfigTracker:
         tracker = ConfigTracker(tmp_path / "nonexistent.yaml")
         h = tracker.compute_hash()
         assert h is None
+
+
+class TestTransactionStatus:
+    def test_enum_values(self) -> None:
+        assert TransactionStatus.IN_PROGRESS.value == "in_progress"
+        assert TransactionStatus.COMMITTED.value == "committed"
+
+
+class TestUpgradeTransaction:
+    def _make_config_dir(self, tmp_path: Path) -> Path:
+        config_dir = tmp_path / ".3surgeons"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump({"phase": 1, "schema_version": 1}))
+        return config_dir
+
+    def test_begin_creates_snapshot(self, tmp_path: Path) -> None:
+        config_dir = self._make_config_dir(tmp_path)
+        tx = UpgradeTransaction(config_dir)
+        tx.begin(current_phase=1, target_phase=2)
+        assert tx.status == TransactionStatus.IN_PROGRESS
+        snapshot_file = config_dir / "upgrade_snapshot.json"
+        assert snapshot_file.exists()
+        snapshot = json.loads(snapshot_file.read_text())
+        assert snapshot["status"] == "in_progress"
+        assert snapshot["from_phase"] == 1
+        assert snapshot["to_phase"] == 2
+
+    def test_commit_marks_committed(self, tmp_path: Path) -> None:
+        config_dir = self._make_config_dir(tmp_path)
+        tx = UpgradeTransaction(config_dir)
+        tx.begin(current_phase=1, target_phase=2)
+        tx.commit()
+        assert tx.status == TransactionStatus.COMMITTED
+        snapshot = json.loads((config_dir / "upgrade_snapshot.json").read_text())
+        assert snapshot["status"] == "committed"
+
+    def test_rollback_restores_config(self, tmp_path: Path) -> None:
+        config_dir = self._make_config_dir(tmp_path)
+        config_file = config_dir / "config.yaml"
+        original_content = config_file.read_text()
+
+        tx = UpgradeTransaction(config_dir)
+        tx.begin(current_phase=1, target_phase=2)
+        # Simulate upgrade: change config
+        config_file.write_text(yaml.dump({"phase": 2, "schema_version": 1}))
+        # Rollback
+        tx.rollback()
+        assert config_file.read_text() == original_content
+        assert tx.status is None  # Snapshot cleaned up
+
+    def test_needs_recovery_on_in_progress(self, tmp_path: Path) -> None:
+        config_dir = self._make_config_dir(tmp_path)
+        tx = UpgradeTransaction(config_dir)
+        tx.begin(current_phase=1, target_phase=2)
+        # Simulate crash: create new transaction instance (fresh startup)
+        tx2 = UpgradeTransaction(config_dir)
+        assert tx2.needs_recovery()
+
+    def test_no_recovery_on_committed(self, tmp_path: Path) -> None:
+        config_dir = self._make_config_dir(tmp_path)
+        tx = UpgradeTransaction(config_dir)
+        tx.begin(current_phase=1, target_phase=2)
+        tx.commit()
+        tx2 = UpgradeTransaction(config_dir)
+        assert not tx2.needs_recovery()
+
+    def test_recover_reverts_to_snapshot(self, tmp_path: Path) -> None:
+        config_dir = self._make_config_dir(tmp_path)
+        config_file = config_dir / "config.yaml"
+        original = config_file.read_text()
+
+        tx = UpgradeTransaction(config_dir)
+        tx.begin(current_phase=1, target_phase=2)
+        config_file.write_text(yaml.dump({"phase": 2}))
+        # Simulate crash + fresh startup
+        tx2 = UpgradeTransaction(config_dir)
+        assert tx2.needs_recovery()
+        tx2.recover()
+        assert config_file.read_text() == original
