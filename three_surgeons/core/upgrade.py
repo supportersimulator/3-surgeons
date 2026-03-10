@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml
 import httpx
 
 from three_surgeons.core.config import Config, detect_local_backend
@@ -274,3 +275,107 @@ class UpgradeEventLog:
                 except json.JSONDecodeError:
                     continue
         return entries
+
+
+class UpgradeAction(enum.Enum):
+    """Possible upgrade decisions."""
+
+    SILENT_UPGRADE = "silent_upgrade"
+    INTERACTIVE_CHOOSER = "interactive_chooser"
+    NO_ACTION = "no_action"
+    SILENT_DOWNGRADE = "silent_downgrade"
+
+
+# Phase 2 capabilities — any ONE of these triggers Phase 2
+_PHASE2_CAPABILITIES = {InfraCapability.REDIS, InfraCapability.CONTEXTDNA}
+
+
+class UpgradeEngine:
+    """Orchestrates probe -> decide -> execute upgrade flow.
+
+    On init, checks for crash recovery (interrupted transactions).
+    """
+
+    def __init__(self, config: Config, config_dir: Path) -> None:
+        self._config = config
+        self._config_dir = config_dir
+        self._config_path = config_dir / "config.yaml"
+        self._event_log = UpgradeEventLog(config_dir / "upgrade.log")
+        self.recovered_from_crash = False
+
+        # Crash recovery check
+        tx = UpgradeTransaction(config_dir)
+        if tx.needs_recovery():
+            recovery_info = tx.recover()
+            self.recovered_from_crash = True
+            if recovery_info:
+                self._config.phase = recovery_info.get("from_phase", 1)
+                self._event_log.record(
+                    "crash_recovery",
+                    from_phase=recovery_info.get("to_phase"),
+                    to_phase=recovery_info.get("from_phase"),
+                    details="Recovered from interrupted upgrade",
+                )
+
+    def decide(self, probe_result: ProbeResult) -> tuple:
+        """Decide upgrade action based on probe results.
+
+        Returns (UpgradeAction, details_dict).
+        """
+        current = self._config.phase
+        detected = probe_result.detected_phase
+
+        if detected == current:
+            return UpgradeAction.NO_ACTION, {}
+
+        if detected < current:
+            # Degradation detected
+            return UpgradeAction.SILENT_DOWNGRADE, {
+                "target_phase": detected,
+                "reason": "Infrastructure no longer available",
+            }
+
+        # Upgrade available — check if multiple Phase 2 paths exist
+        phase2_caps = [c for c in probe_result.capabilities if c in _PHASE2_CAPABILITIES]
+        if len(phase2_caps) > 1 and current < 2:
+            return UpgradeAction.INTERACTIVE_CHOOSER, {
+                "target_phase": detected,
+                "options": [c.value for c in phase2_caps],
+            }
+
+        return UpgradeAction.SILENT_UPGRADE, {"target_phase": detected}
+
+    def execute_upgrade(self, target_phase: int) -> None:
+        """Execute an upgrade transaction to target_phase."""
+        current = self._config.phase
+        tx = UpgradeTransaction(self._config_dir)
+
+        # 1. Begin transaction (snapshot)
+        tx.begin(current_phase=current, target_phase=target_phase)
+
+        try:
+            # 2. Apply config changes
+            config_data = {}
+            if self._config_path.is_file():
+                config_data = yaml.safe_load(self._config_path.read_text()) or {}
+            config_data["phase"] = target_phase
+            self._config_path.write_text(yaml.dump(config_data, default_flow_style=False))
+
+            # 3. Commit transaction
+            tx.commit()
+            self._config.phase = target_phase
+
+            # 4. Log event
+            event = "upgrade" if target_phase > current else "downgrade"
+            self._event_log.record(event, from_phase=current, to_phase=target_phase)
+
+        except Exception:
+            # Rollback on any failure
+            tx.rollback()
+            self._event_log.record(
+                "upgrade_failed",
+                from_phase=current,
+                to_phase=target_phase,
+                details="Rolled back due to error",
+            )
+            raise

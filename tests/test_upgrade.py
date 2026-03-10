@@ -18,6 +18,8 @@ from three_surgeons.core.upgrade import (
     UpgradeTransaction,
     TransactionStatus,
     UpgradeEventLog,
+    UpgradeEngine,
+    UpgradeAction,
 )
 from three_surgeons.core.config import Config
 
@@ -233,3 +235,88 @@ class TestUpgradeEventLog:
         content = log_path.read_text()
         assert "probe" in content
         assert "No new infra" in content
+
+
+class TestUpgradeAction:
+    def test_enum(self) -> None:
+        assert UpgradeAction.SILENT_UPGRADE.value == "silent_upgrade"
+        assert UpgradeAction.INTERACTIVE_CHOOSER.value == "interactive_chooser"
+        assert UpgradeAction.NO_ACTION.value == "no_action"
+        assert UpgradeAction.SILENT_DOWNGRADE.value == "silent_downgrade"
+
+
+class TestUpgradeEngine:
+    def _make_engine(self, tmp_path: Path, phase: int = 1) -> UpgradeEngine:
+        config_dir = tmp_path / ".3surgeons"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump({"phase": phase, "schema_version": 1}))
+        cfg = Config()
+        cfg.phase = phase
+        return UpgradeEngine(config=cfg, config_dir=config_dir)
+
+    def test_no_upgrade_same_phase(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path, phase=1)
+        probe_result = ProbeResult(detected_phase=1)
+        action, details = engine.decide(probe_result)
+        assert action == UpgradeAction.NO_ACTION
+
+    def test_silent_upgrade_single_path(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path, phase=1)
+        probe_result = ProbeResult(
+            detected_phase=2,
+            capabilities=[InfraCapability.REDIS],
+        )
+        action, details = engine.decide(probe_result)
+        assert action == UpgradeAction.SILENT_UPGRADE
+        assert details["target_phase"] == 2
+
+    def test_interactive_chooser_multiple_paths(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path, phase=1)
+        probe_result = ProbeResult(
+            detected_phase=2,
+            capabilities=[InfraCapability.REDIS, InfraCapability.CONTEXTDNA],
+        )
+        action, details = engine.decide(probe_result)
+        assert action == UpgradeAction.INTERACTIVE_CHOOSER
+
+    def test_silent_downgrade(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path, phase=2)
+        probe_result = ProbeResult(detected_phase=1, capabilities=[])
+        action, details = engine.decide(probe_result)
+        assert action == UpgradeAction.SILENT_DOWNGRADE
+        assert details["target_phase"] == 1
+
+    def test_execute_upgrade_creates_transaction(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path, phase=1)
+        engine.execute_upgrade(target_phase=2)
+        # Config should now say phase 2
+        config_file = tmp_path / ".3surgeons" / "config.yaml"
+        loaded = yaml.safe_load(config_file.read_text())
+        assert loaded["phase"] == 2
+
+    def test_crash_recovery_on_init(self, tmp_path: Path) -> None:
+        """Engine detects interrupted upgrade on init and recovers."""
+        config_dir = tmp_path / ".3surgeons"
+        config_dir.mkdir(parents=True)
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump({"phase": 1}))
+
+        # Simulate interrupted upgrade
+        snapshot = {
+            "status": "in_progress",
+            "from_phase": 1,
+            "to_phase": 2,
+            "config_backup": yaml.dump({"phase": 1}),
+            "timestamp": time.time(),
+        }
+        (config_dir / "upgrade_snapshot.json").write_text(json.dumps(snapshot))
+        config_file.write_text(yaml.dump({"phase": 2}))  # partially upgraded
+
+        cfg = Config()
+        cfg.phase = 2
+        engine = UpgradeEngine(config=cfg, config_dir=config_dir)
+        # Engine should auto-recover
+        assert engine.recovered_from_crash
+        loaded = yaml.safe_load(config_file.read_text())
+        assert loaded["phase"] == 1
