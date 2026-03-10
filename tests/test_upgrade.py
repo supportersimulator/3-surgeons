@@ -17,6 +17,7 @@ from three_surgeons.core.upgrade import (
     InfraCapability,
     UpgradeTransaction,
     TransactionStatus,
+    UpgradeEventLog,
 )
 from three_surgeons.core.config import Config
 
@@ -207,3 +208,28 @@ class TestUpgradeTransaction:
         assert tx2.needs_recovery()
         tx2.recover()
         assert config_file.read_text() == original
+
+
+class TestUpgradeEventLog:
+    def test_log_event(self, tmp_path: Path) -> None:
+        log = UpgradeEventLog(tmp_path / "upgrade.log")
+        log.record("upgrade", from_phase=1, to_phase=2, details="Silent upgrade")
+        entries = log.read_all()
+        assert len(entries) == 1
+        assert entries[0]["event"] == "upgrade"
+        assert entries[0]["from_phase"] == 1
+
+    def test_append_only(self, tmp_path: Path) -> None:
+        log = UpgradeEventLog(tmp_path / "upgrade.log")
+        log.record("upgrade", from_phase=1, to_phase=2)
+        log.record("revert", from_phase=2, to_phase=1)
+        entries = log.read_all()
+        assert len(entries) == 2
+
+    def test_human_readable(self, tmp_path: Path) -> None:
+        log_path = tmp_path / "upgrade.log"
+        log = UpgradeEventLog(log_path)
+        log.record("probe", details="No new infra")
+        content = log_path.read_text()
+        assert "probe" in content
+        assert "No new infra" in content

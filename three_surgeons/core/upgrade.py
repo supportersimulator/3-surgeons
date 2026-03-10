@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -225,3 +226,51 @@ class UpgradeTransaction:
         data = json.loads(self._snapshot_path.read_text())
         self.rollback()
         return data
+
+
+class UpgradeEventLog:
+    """Append-only, human-readable upgrade event log.
+
+    Every upgrade, downgrade, revert, and probe result writes here.
+    Accessed via: 3s doctor --history
+    """
+
+    def __init__(self, log_path: Path) -> None:
+        self._path = log_path
+
+    def record(
+        self,
+        event: str,
+        from_phase: Optional[int] = None,
+        to_phase: Optional[int] = None,
+        details: Optional[str] = None,
+    ) -> None:
+        """Append a timestamped event entry."""
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": event,
+        }
+        if from_phase is not None:
+            entry["from_phase"] = from_phase
+        if to_phase is not None:
+            entry["to_phase"] = to_phase
+        if details:
+            entry["details"] = details
+
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+    def read_all(self) -> List[dict]:
+        """Read all log entries. Returns list of dicts."""
+        if not self._path.is_file():
+            return []
+        entries = []
+        for line in self._path.read_text().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        return entries
