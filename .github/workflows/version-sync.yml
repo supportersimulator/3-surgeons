@@ -1,0 +1,43 @@
+# .github/workflows/version-sync.yml
+name: Version Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.claude-plugin/plugin.json'
+
+jobs:
+  sync-marketplace-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract plugin version
+        id: version
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('.claude-plugin/plugin.json'))['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Update marketplace.json version
+        run: |
+          python3 -c "
+          import json
+          with open('.claude-plugin/marketplace.json') as f:
+              data = json.load(f)
+          data['plugins'][0]['version'] = '${{ steps.version.outputs.version }}'
+          with open('.claude-plugin/marketplace.json', 'w') as f:
+              json.dump(data, f, indent=2)
+              f.write('\n')
+          "
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet .claude-plugin/marketplace.json || \
+            (git add .claude-plugin/marketplace.json && \
+             git commit -m "chore: sync marketplace version to ${{ steps.version.outputs.version }}" && \
+             git push)
