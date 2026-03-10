@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from three_surgeons.core.upgrade import (
+    ConfigTracker,
     EcosystemProbe,
     ProbeResult,
     InfraCapability,
@@ -76,3 +77,47 @@ class TestEcosystemProbe:
             result = probe.run()
             assert result.detected_phase == 2
             assert len(result.capabilities) >= 2
+
+
+class TestConfigTracker:
+    def test_compute_hash(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("phase: 1\nschema_version: 1\n")
+        tracker = ConfigTracker(config_file)
+        h = tracker.compute_hash()
+        assert len(h) == 64  # SHA256 hex digest
+        # Same content → same hash
+        assert tracker.compute_hash() == h
+
+    def test_hash_changes_on_content_change(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("phase: 1\n")
+        tracker = ConfigTracker(config_file)
+        h1 = tracker.compute_hash()
+        config_file.write_text("phase: 2\n")
+        h2 = tracker.compute_hash()
+        assert h1 != h2
+
+    def test_has_changed_detects_external_edit(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("phase: 1\n")
+        tracker = ConfigTracker(config_file)
+        tracker.update_stored_hash()
+        assert not tracker.has_changed()
+        config_file.write_text("phase: 2\n")
+        assert tracker.has_changed()
+
+    def test_increment_sequence(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("phase: 1\n")
+        tracker = ConfigTracker(config_file)
+        assert tracker.sequence == 0
+        tracker.increment_sequence()
+        assert tracker.sequence == 1
+        tracker.increment_sequence()
+        assert tracker.sequence == 2
+
+    def test_missing_file_hash(self, tmp_path: Path) -> None:
+        tracker = ConfigTracker(tmp_path / "nonexistent.yaml")
+        h = tracker.compute_hash()
+        assert h is None

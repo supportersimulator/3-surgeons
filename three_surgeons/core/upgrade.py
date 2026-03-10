@@ -108,3 +108,32 @@ class EcosystemProbe:
         """Check for IDE event bus (future -- Phase 3)."""
         # Phase 3: check for Electron IPC or event bus socket
         return os.environ.get("CONTEXTDNA_IDE_BUS") is not None
+
+
+class ConfigTracker:
+    """Tracks config file changes via SHA256 hash + monotonic sequence."""
+
+    def __init__(self, config_path: Path) -> None:
+        self._path = config_path
+        self._stored_hash: Optional[str] = None
+        self.sequence: int = 0
+
+    def compute_hash(self) -> Optional[str]:
+        """SHA256 of config file contents. None if file missing."""
+        if not self._path.is_file():
+            return None
+        content = self._path.read_bytes()
+        return hashlib.sha256(content).hexdigest()
+
+    def update_stored_hash(self) -> None:
+        """Store current hash as reference for change detection."""
+        self._stored_hash = self.compute_hash()
+
+    def has_changed(self) -> bool:
+        """True if config file changed since last update_stored_hash()."""
+        return self.compute_hash() != self._stored_hash
+
+    def increment_sequence(self) -> int:
+        """Increment and return monotonic sequence counter."""
+        self.sequence += 1
+        return self.sequence
