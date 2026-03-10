@@ -14,6 +14,7 @@ from three_surgeons.core.upgrade import (
     AdaptivePoller,
     ConfigTracker,
     EcosystemProbe,
+    NudgeDetector,
     ProbeResult,
     InfraCapability,
     UpgradeTransaction,
@@ -350,3 +351,47 @@ class TestAdaptivePoller:
         assert poller.should_probe()  # First time always true
         poller.mark_probed()
         assert not poller.should_probe()  # Just probed
+
+
+class TestNudgeDetector:
+    def test_no_nudge_below_thresholds(self) -> None:
+        detector = NudgeDetector(
+            evidence_count=10,
+            cross_exam_count=3,
+            config_edit_count=1,
+        )
+        assert not detector.should_nudge()
+
+    def test_nudge_on_evidence_threshold(self) -> None:
+        detector = NudgeDetector(
+            evidence_count=51,
+            cross_exam_count=0,
+            config_edit_count=0,
+        )
+        assert detector.should_nudge()
+        assert "evidence" in detector.reason().lower()
+
+    def test_nudge_on_cross_exam_threshold(self) -> None:
+        detector = NudgeDetector(
+            evidence_count=0,
+            cross_exam_count=11,
+            config_edit_count=0,
+        )
+        assert detector.should_nudge()
+
+    def test_nudge_on_config_edits(self) -> None:
+        detector = NudgeDetector(
+            evidence_count=0,
+            cross_exam_count=0,
+            config_edit_count=6,
+        )
+        assert detector.should_nudge()
+
+    def test_nudge_disabled(self) -> None:
+        detector = NudgeDetector(
+            evidence_count=100,
+            cross_exam_count=100,
+            config_edit_count=100,
+            nudge_enabled=False,
+        )
+        assert not detector.should_nudge()

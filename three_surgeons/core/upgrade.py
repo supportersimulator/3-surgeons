@@ -421,3 +421,48 @@ class AdaptivePoller:
     def mark_probed(self) -> None:
         """Record that a probe just ran."""
         self._last_probe = time.time()
+
+
+class NudgeDetector:
+    """Detects when a user would benefit from upgrading.
+
+    Thresholds indicate a power user who would benefit from
+    shared state and expanded queue backends.
+    """
+
+    EVIDENCE_THRESHOLD = 50
+    CROSS_EXAM_THRESHOLD = 10
+    CONFIG_EDIT_THRESHOLD = 5
+
+    def __init__(
+        self,
+        evidence_count: int = 0,
+        cross_exam_count: int = 0,
+        config_edit_count: int = 0,
+        nudge_enabled: bool = True,
+    ) -> None:
+        self._evidence_count = evidence_count
+        self._cross_exam_count = cross_exam_count
+        self._config_edit_count = config_edit_count
+        self._nudge_enabled = nudge_enabled
+
+    def should_nudge(self) -> bool:
+        """True if any threshold is exceeded and nudge is enabled."""
+        if not self._nudge_enabled:
+            return False
+        return (
+            self._evidence_count > self.EVIDENCE_THRESHOLD
+            or self._cross_exam_count > self.CROSS_EXAM_THRESHOLD
+            or self._config_edit_count > self.CONFIG_EDIT_THRESHOLD
+        )
+
+    def reason(self) -> str:
+        """Human-readable reason for nudge."""
+        reasons = []
+        if self._evidence_count > self.EVIDENCE_THRESHOLD:
+            reasons.append(f"{self._evidence_count} evidence items (>{self.EVIDENCE_THRESHOLD})")
+        if self._cross_exam_count > self.CROSS_EXAM_THRESHOLD:
+            reasons.append(f"{self._cross_exam_count} cross-exams (>{self.CROSS_EXAM_THRESHOLD})")
+        if self._config_edit_count > self.CONFIG_EDIT_THRESHOLD:
+            reasons.append(f"{self._config_edit_count} config edits (>{self.CONFIG_EDIT_THRESHOLD})")
+        return "Power user thresholds reached: " + ", ".join(reasons) if reasons else ""
