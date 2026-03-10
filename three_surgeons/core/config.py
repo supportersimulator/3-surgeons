@@ -144,6 +144,32 @@ class ReviewConfig:
 
 
 @dataclass
+class QueueConfig:
+    """Priority queue configuration. Same interface, expanding backend."""
+
+    backend: str = "local"  # local | redis | distributed
+    priorities: List[str] = field(
+        default_factory=lambda: ["USER_FACING", "OPERATIONAL", "EXTERNAL", "BACKGROUND"]
+    )
+
+
+@dataclass
+class UpgradeConfig:
+    """Upgrade adaptability configuration. Full Phase 3 schema from Day 1."""
+
+    polling_interval: int = 300       # Adaptive: 5min start, backs off to 1hr
+    last_probe: Optional[str] = None  # ISO timestamp of last probe
+    config_hash: Optional[str] = None # SHA256 of config.yaml
+    sequence: int = 0                 # Monotonic counter for conflict resolution
+    nudge: bool = True                # User can silence with: 3s config set upgrade.nudge false
+    # Transaction fields
+    transaction_status: Optional[str] = None    # null | "in_progress" | "committed"
+    transaction_snapshot: Optional[str] = None  # JSON of full config before upgrade
+    revert_target: Optional[int] = None         # Phase to revert to
+    quorum_votes: Optional[str] = None          # JSON of surgeon votes
+
+
+@dataclass
 class Config:
     """Top-level configuration for the 3-Surgeons system.
 
@@ -171,6 +197,10 @@ class Config:
     state: StateConfig = field(default_factory=StateConfig)
     gpu_lock_path: Optional[str] = None
     review: ReviewConfig = field(default_factory=ReviewConfig)
+    schema_version: int = 1
+    phase: int = 1  # Auto-detected, auto-promoted
+    queue: QueueConfig = field(default_factory=QueueConfig)
+    upgrade: UpgradeConfig = field(default_factory=UpgradeConfig)
 
     @classmethod
     def from_yaml(cls, path: Path) -> Config:
@@ -268,6 +298,20 @@ class Config:
         review_raw = raw.get("review", {})
         if isinstance(review_raw, dict):
             cfg.review = _merge_dataclass(cfg.review, review_raw)
+
+        # Top-level scalars
+        if "schema_version" in raw:
+            cfg.schema_version = raw["schema_version"]
+        if "phase" in raw:
+            cfg.phase = raw["phase"]
+
+        queue_raw = raw.get("queue", {})
+        if isinstance(queue_raw, dict):
+            cfg.queue = _merge_dataclass(cfg.queue, queue_raw)
+
+        upgrade_raw = raw.get("upgrade", {})
+        if isinstance(upgrade_raw, dict):
+            cfg.upgrade = _merge_dataclass(cfg.upgrade, upgrade_raw)
 
         return cfg
 

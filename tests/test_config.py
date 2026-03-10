@@ -320,3 +320,61 @@ class TestReviewConfig:
         config = Config()
         config.review.auto_depth = "auto"
         assert config.review.auto_depth in ("off", "suggest", "auto")
+
+
+from three_surgeons.core.config import UpgradeConfig, QueueConfig
+
+
+class TestUpgradeConfig:
+    def test_defaults(self) -> None:
+        uc = UpgradeConfig()
+        assert uc.polling_interval == 300
+        assert uc.last_probe is None
+        assert uc.config_hash is None
+        assert uc.sequence == 0
+        assert uc.nudge is True
+        assert uc.transaction_status is None
+        assert uc.transaction_snapshot is None
+        assert uc.revert_target is None
+        assert uc.quorum_votes is None
+
+    def test_phase_default_is_1(self) -> None:
+        cfg = Config()
+        assert cfg.phase == 1
+        assert cfg.schema_version == 1
+
+
+class TestQueueConfig:
+    def test_defaults(self) -> None:
+        qc = QueueConfig()
+        assert qc.backend == "local"
+        assert qc.priorities == ["USER_FACING", "OPERATIONAL", "EXTERNAL", "BACKGROUND"]
+
+
+class TestConfigWithUpgrade:
+    def test_config_has_upgrade(self) -> None:
+        cfg = Config()
+        assert isinstance(cfg.upgrade, UpgradeConfig)
+
+    def test_config_has_queue(self) -> None:
+        cfg = Config()
+        assert isinstance(cfg.queue, QueueConfig)
+
+    def test_yaml_roundtrip_upgrade(self, tmp_path) -> None:
+        import yaml
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(yaml.dump({
+            "phase": 2,
+            "upgrade": {
+                "polling_interval": 600,
+                "nudge": False,
+            },
+            "queue": {
+                "backend": "redis",
+            },
+        }))
+        cfg = Config.from_yaml(config_file)
+        assert cfg.phase == 2
+        assert cfg.upgrade.polling_interval == 600
+        assert cfg.upgrade.nudge is False
+        assert cfg.queue.backend == "redis"
