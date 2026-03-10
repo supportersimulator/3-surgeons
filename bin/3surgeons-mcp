@@ -52,6 +52,34 @@ for PY in python3 python; do
     fi
 done
 
-echo "Error: Cannot find Python >=3.10 with mcp and three_surgeons installed." >&2
-echo "Run: cd ${PLUGIN_ROOT} && python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'" >&2
+# 4. Auto-bootstrap: try to create a venv and install
+echo "3-Surgeons: No runtime found. Attempting auto-bootstrap..." >&2
+for PY in python3 python; do
+    if command -v "$PY" >/dev/null 2>&1; then
+        PY_VER=$("$PY" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "0.0")
+        if [ "$(echo "$PY_VER" | awk -F. '{print ($1 * 100 + $2)}')" -ge 310 ]; then
+            BOOTSTRAP_VENV="${PLUGIN_ROOT}/.venv"
+            echo "  Creating venv at ${BOOTSTRAP_VENV} ..." >&2
+            if "$PY" -m venv "$BOOTSTRAP_VENV" 2>&1 >&2; then
+                echo "  Installing three-surgeons[mcp] ..." >&2
+                if "${BOOTSTRAP_VENV}/bin/pip" install -q -e "${PLUGIN_ROOT}[mcp]" 2>&1 >&2; then
+                    echo "  Bootstrap complete." >&2
+                    exec "${BOOTSTRAP_VENV}/bin/python" -m three_surgeons.mcp.server "$@"
+                fi
+            fi
+            echo "  Bootstrap failed for $PY ($PY_VER)" >&2
+        fi
+    fi
+done
+
+# --- No runtime found — structured error output ---
+ESCAPED_ROOT=$(printf '%s' "${PLUGIN_ROOT}" | sed 's/\\/\\\\/g; s/"/\\"/g')
+cat >&2 <<DIAG
+{
+  "code": "3S-MCP-MISS",
+  "passed": false,
+  "message": "Cannot find Python >=3.10 with mcp and three_surgeons installed",
+  "fix": "cd ${ESCAPED_ROOT} && python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'"
+}
+DIAG
 exit 1

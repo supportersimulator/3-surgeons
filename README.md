@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo-256.png" alt="3-Surgeons" width="128" />
+</p>
+
 # 3-Surgeons
 
 Multi-model consensus system for Claude Code. Three LLMs cross-examine each other to catch blind spots on critical decisions.

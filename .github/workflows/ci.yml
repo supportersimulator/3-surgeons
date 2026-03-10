@@ -11,19 +11,58 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ['3.11', '3.12']
+        python-version: ['3.10', '3.12']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
-        run: pip install -e ".[test]"
+        run: pip install -e ".[test,http]"
       - name: Lint (non-blocking)
         run: pip install ruff && ruff check . || true
       - name: Run unit tests
         run: pytest -m "not integration" --timeout=30 -v
+      - name: Doctor contract (JSON schema)
+        run: |
+          OUTPUT=$(python -m three_surgeons.cli.main doctor --json 2>/dev/null || true)
+          echo "$OUTPUT" | python -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          assert 'checks' in data, 'missing checks key'
+          assert 'all_passed' in data, 'missing all_passed key'
+          for c in data['checks']:
+              assert c['code'].startswith('3S-'), f'bad code: {c[\"code\"]}'
+          print('Doctor contract: OK')
+          "
+      - name: Launcher smoke test
+        run: bash tests/test_launcher.sh
+
+  test-39-expected-fail:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+      - name: Verify Python 3.9 fails gracefully
+        run: |
+          pip install -e ".[test,http]" || true
+          # Doctor should report 3S-PY-OLD
+          OUTPUT=$(python -m three_surgeons.cli.main doctor --json 2>/dev/null || echo '{}')
+          echo "$OUTPUT"
+          echo "$OUTPUT" | python -c "
+          import sys, json
+          try:
+              data = json.load(sys.stdin)
+              codes = [c['code'] for c in data.get('checks', [])]
+              assert '3S-PY-OLD' in codes, f'Expected 3S-PY-OLD, got {codes}'
+              print('Python 3.9 correctly reports 3S-PY-OLD')
+          except (json.JSONDecodeError, KeyError):
+              print('Doctor unavailable on 3.9 — acceptable')
+          "
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')

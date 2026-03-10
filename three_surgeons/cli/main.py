@@ -352,6 +352,11 @@ def setup_check(ctx: click.Context) -> None:
     all_ok = all(s["ping_ok"] for s in results["surgeons"].values())
     results["status"] = "operational" if all_ok else "degraded"
 
+    # Structured diagnostics (3S-* codes)
+    from three_surgeons.core.diagnostics import run_all_checks
+    diag_results = run_all_checks()
+    results["diagnostics"] = [r.to_dict() for r in diag_results]
+
     click.echo(_json.dumps(results, indent=2))
 
     if not all_ok:
@@ -383,6 +388,50 @@ def setup_check(ctx: click.Context) -> None:
                 err=True,
             )
         click.echo("\n  Run '3s init' for interactive setup.", err=True)
+        ctx.exit(1)
+
+
+# -- doctor -----------------------------------------------------------------
+
+
+@cli.command()
+@click.option("--json", "json_mode", is_flag=True, help="Output structured JSON")
+@click.pass_context
+def doctor(ctx: click.Context, json_mode: bool) -> None:
+    """Diagnose installation health with structured 3S-* error codes.
+
+    Checks Python version, MCP runtime, config files, and local backends.
+    Returns structured output suitable for CI and agent consumption.
+    """
+    import json as _json
+
+    from three_surgeons.core.diagnostics import run_all_checks
+
+    results = run_all_checks()
+    failed = [r for r in results if not r.passed]
+
+    if json_mode:
+        output = {
+            "checks": [r.to_dict() for r in results],
+            "all_passed": len(failed) == 0,
+            "failed": [r.to_dict() for r in failed],
+        }
+        click.echo(_json.dumps(output, indent=2))
+    else:
+        click.echo("3-Surgeons Doctor")
+        click.echo("=" * 40)
+        for r in results:
+            icon = "PASS" if r.passed else "FAIL"
+            click.echo(f"  [{icon}] {r.code.value}: {r.message}")
+        click.echo()
+        if failed:
+            click.echo("--- Fixes ---")
+            for r in failed:
+                if r.fix:
+                    click.echo(f"  {r.code.value}: {r.fix}")
+            click.echo()
+
+    if failed:
         ctx.exit(1)
 
 
