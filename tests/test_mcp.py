@@ -80,6 +80,8 @@ class TestMCPServerImport:
             "cardio_review_tool",
             "ab_validate_tool",
             "research_tool",
+            "upgrade_probe",
+            "upgrade_history",
         }
         for name in TOOL_NAMES:
             assert name in known, f"Unexpected tool: {name}"

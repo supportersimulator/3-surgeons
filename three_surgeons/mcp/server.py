@@ -80,6 +80,8 @@ TOOL_NAMES: list[str] = [
     "cardio_review_tool",
     "ab_validate_tool",
     "research_tool",
+    "upgrade_probe",
+    "upgrade_history",
 ]
 
 # ── Dependency builders (thin, testable seams) ──────────────────────────
@@ -434,6 +436,40 @@ def _research_impl(topic: str) -> dict:
     }
 
 
+def _upgrade_log_path() -> "Path":
+    """Return the path to the upgrade event log."""
+    from pathlib import Path
+
+    return Path.home() / ".3surgeons" / "upgrade.log"
+
+
+def _upgrade_probe_impl() -> dict:
+    """Probe ecosystem and report detected phase + available infrastructure."""
+    from three_surgeons.core.upgrade import EcosystemProbe
+
+    probe = EcosystemProbe()
+    result = probe.run()
+    config = _build_config()
+    return {
+        "current_phase": config.phase,
+        "detected_phase": result.detected_phase,
+        "capabilities": [c.value for c in result.capabilities],
+        "details": result.details,
+    }
+
+
+def _upgrade_history_impl() -> str:
+    """Show upgrade event log."""
+    import json
+
+    from three_surgeons.core.upgrade import UpgradeEventLog
+
+    log_path = _upgrade_log_path()
+    log = UpgradeEventLog(log_path)
+    entries = log.read_all()
+    return json.dumps(entries, indent=2) if entries else "No upgrade history."
+
+
 # ── FastMCP wiring (optional -- gracefully degrades) ────────────────────
 
 _mcp_app = None
@@ -539,6 +575,16 @@ try:
     def research_tool(topic: str) -> dict:
         """Self-directed research on a topic."""
         return _research_impl(topic)
+
+    @_mcp_app.tool()
+    def upgrade_probe() -> dict:
+        """Probe ecosystem and report detected phase + available infrastructure."""
+        return _upgrade_probe_impl()
+
+    @_mcp_app.tool()
+    def upgrade_history() -> str:
+        """Show upgrade event log."""
+        return _upgrade_history_impl()
 
 except ImportError:
     # mcp SDK not installed -- tools are still usable as plain functions
