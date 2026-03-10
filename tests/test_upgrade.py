@@ -11,6 +11,7 @@ import pytest
 import yaml
 
 from three_surgeons.core.upgrade import (
+    AdaptivePoller,
     ConfigTracker,
     EcosystemProbe,
     ProbeResult,
@@ -320,3 +321,32 @@ class TestUpgradeEngine:
         assert engine.recovered_from_crash
         loaded = yaml.safe_load(config_file.read_text())
         assert loaded["phase"] == 1
+
+
+class TestAdaptivePoller:
+    def test_initial_interval(self) -> None:
+        poller = AdaptivePoller(base_interval=300)
+        assert poller.current_interval == 300
+
+    def test_backoff_on_no_change(self) -> None:
+        poller = AdaptivePoller(base_interval=300, max_interval=3600)
+        poller.on_no_change()
+        assert poller.current_interval > 300
+        # Keep backing off
+        for _ in range(20):
+            poller.on_no_change()
+        assert poller.current_interval <= 3600
+
+    def test_reset_on_change(self) -> None:
+        poller = AdaptivePoller(base_interval=300, max_interval=3600)
+        for _ in range(10):
+            poller.on_no_change()
+        assert poller.current_interval > 300
+        poller.on_change_detected()
+        assert poller.current_interval == 300
+
+    def test_should_probe(self) -> None:
+        poller = AdaptivePoller(base_interval=1)  # 1 second for testing
+        assert poller.should_probe()  # First time always true
+        poller.mark_probed()
+        assert not poller.should_probe()  # Just probed

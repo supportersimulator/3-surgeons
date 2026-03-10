@@ -379,3 +379,45 @@ class UpgradeEngine:
                 details="Rolled back due to error",
             )
             raise
+
+
+class AdaptivePoller:
+    """Adaptive polling interval: starts fast, backs off when stable.
+
+    Starts at base_interval (default 5min/300s), backs off by 1.5x
+    on each no-change probe, caps at max_interval (default 1hr/3600s).
+    Resets to base_interval on any system change signal.
+    """
+
+    def __init__(
+        self,
+        base_interval: int = 300,
+        max_interval: int = 3600,
+        backoff_factor: float = 1.5,
+    ) -> None:
+        self.base_interval = base_interval
+        self.max_interval = max_interval
+        self._backoff_factor = backoff_factor
+        self.current_interval: float = base_interval
+        self._last_probe: Optional[float] = None
+
+    def on_no_change(self) -> None:
+        """Called when probe finds no changes. Increase interval."""
+        self.current_interval = min(
+            self.current_interval * self._backoff_factor,
+            self.max_interval,
+        )
+
+    def on_change_detected(self) -> None:
+        """Called when any system change is detected. Reset interval."""
+        self.current_interval = self.base_interval
+
+    def should_probe(self) -> bool:
+        """True if enough time has passed since last probe."""
+        if self._last_probe is None:
+            return True
+        return (time.time() - self._last_probe) >= self.current_interval
+
+    def mark_probed(self) -> None:
+        """Record that a probe just ran."""
+        self._last_probe = time.time()
