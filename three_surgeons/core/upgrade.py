@@ -16,10 +16,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import logging
+
 import yaml
 import httpx
 
 from three_surgeons.core.config import Config, detect_local_backend
+
+logger = logging.getLogger(__name__)
 
 
 class InfraCapability(enum.Enum):
@@ -91,6 +95,7 @@ class EcosystemProbe:
             client = redis.Redis(host="127.0.0.1", port=6379, socket_timeout=self._timeout)
             return client.ping()
         except Exception:
+            logger.debug("Redis probe failed", exc_info=True)
             return False
 
     def _check_contextdna(self) -> bool:
@@ -104,6 +109,7 @@ class EcosystemProbe:
             )
             return resp.status_code == 200
         except Exception:
+            logger.debug("ContextDNA probe failed", exc_info=True)
             return False
 
     def _check_ide_event_bus(self) -> bool:
@@ -370,8 +376,11 @@ class UpgradeEngine:
             self._event_log.record(event, from_phase=current, to_phase=target_phase)
 
         except Exception:
-            # Rollback on any failure
-            tx.rollback()
+            # Rollback on any failure — guard against rollback itself failing
+            try:
+                tx.rollback()
+            except Exception:
+                logger.error("Rollback failed during upgrade recovery", exc_info=True)
             self._event_log.record(
                 "upgrade_failed",
                 from_phase=current,
