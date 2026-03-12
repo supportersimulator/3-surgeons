@@ -1201,6 +1201,40 @@ def serve(host: str, port: int) -> None:
     uvicorn.run(app, host=host, port=port)
 
 
+# -- migrate-evidence -------------------------------------------------------
+
+
+@cli.command("migrate-evidence")
+@click.option("--dry-run", is_flag=True, help="Show what would migrate without executing")
+@click.option("--revert", is_flag=True, help="Restore pre-migration snapshot")
+@click.pass_context
+def migrate_evidence(ctx: click.Context, dry_run: bool, revert: bool) -> None:
+    """Migrate evidence store between phases."""
+    from three_surgeons.core.migration import EvidenceMigrator
+
+    config = ctx.obj["config"]
+    db_path = config.evidence.resolved_path
+
+    migrator = EvidenceMigrator(source_db=db_path)
+
+    if revert:
+        if migrator.revert():
+            click.echo("Reverted to pre-migration snapshot.")
+        else:
+            click.echo("No migration snapshot found.")
+            ctx.exit(1)
+        return
+
+    if dry_run:
+        result = migrator.dry_run()
+        click.echo(f"Evidence items: {result.total_items}")
+        click.echo(f"Would migrate: {result.would_migrate}")
+        return
+
+    result = migrator.migrate()
+    click.echo(f"Migrated {result.migrated} items. Snapshot created.")
+
+
 # -- main entry point -------------------------------------------------------
 
 

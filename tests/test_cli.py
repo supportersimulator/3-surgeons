@@ -377,6 +377,20 @@ class TestDoctorUpgradeCommands:
         assert "revert" in result.output.lower() or "snapshot" in result.output.lower()
 
 
+class TestMigrateEvidenceCommand:
+    def test_migrate_dry_run(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["migrate-evidence", "--dry-run"])
+        assert result.exit_code == 0
+        assert "migrate" in result.output.lower() or "items" in result.output.lower()
+
+    def test_migrate_command_exists(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["--help"])
+        assert "migrate-evidence" in result.output
+
+
 class TestMainEntryPoint:
     """Test that the main() function exists and is callable."""
 
