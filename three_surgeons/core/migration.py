@@ -70,7 +70,11 @@ class EvidenceMigrator:
         )
 
     def migrate(self) -> MigrationResult:
-        """Execute migration with pre-migration snapshot."""
+        """Execute migration with pre-migration snapshot.
+
+        Phase 1: snapshot + backup only (no shared backend yet).
+        Phase 2 will add destination writes (Redis/shared SQLite).
+        """
         items = self._read_learnings()
 
         # Create snapshot

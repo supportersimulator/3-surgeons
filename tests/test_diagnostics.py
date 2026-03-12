@@ -118,6 +118,27 @@ class TestCheckSkillRegistration:
         assert not result.passed
         assert result.code == DiagnosticCode.SKL_NONE
 
+    def test_broken_symlink(self, tmp_path: Path) -> None:
+        """Reports SKL_BROKEN when broken symlinks exist."""
+        skills_dir = tmp_path / "skills"
+        probe = skills_dir / "probe"
+        probe.mkdir(parents=True)
+        (probe / "SKILL.md").write_text("# probe\n")
+        # Create a broken symlink
+        broken = skills_dir / "ghost"
+        broken.symlink_to(tmp_path / "nonexistent")
+
+        result = check_skill_registration(plugin_root=tmp_path)
+        assert not result.passed
+        assert result.code == DiagnosticCode.SKL_BROKEN
+
+    def test_filesystem_error(self, tmp_path: Path) -> None:
+        """Reports SKL_BROKEN on filesystem errors."""
+        with patch("three_surgeons.core.skill_registration.SkillRegistrar.discover_skills", side_effect=OSError("boom")):
+            result = check_skill_registration(plugin_root=tmp_path)
+            assert not result.passed
+            assert result.code == DiagnosticCode.SKL_BROKEN
+
 
 class TestRunAllChecks:
     def test_returns_list_of_results(self) -> None:
@@ -167,6 +188,10 @@ class TestDoctorIntegration:
         # Failed checks have fix hints
         for check in data["failed"]:
             assert "fix" in check, f"{check['code']} missing fix"
+
+        # Phase info present
+        assert "phase" in data
+        assert isinstance(data["phase"], int)
 
         # Consistency
         assert data["all_passed"] == (len(data["failed"]) == 0)

@@ -156,14 +156,31 @@ def check_skill_registration(
         # Default: relative to this package
         plugin_root = Path(__file__).resolve().parent.parent.parent
 
-    registrar = SkillRegistrar(plugin_root)
-    skills = registrar.discover_skills()
+    try:
+        registrar = SkillRegistrar(plugin_root)
+        skills = registrar.discover_skills()
+    except OSError:
+        logger.exception("skill discovery failed")
+        return DiagnosticResult.fail(
+            DiagnosticCode.SKL_BROKEN,
+            "Skill discovery failed (filesystem error)",
+            fix="Check permissions on skills/ directory",
+        )
 
     if not skills:
         return DiagnosticResult.fail(
             DiagnosticCode.SKL_NONE,
             "No skills found on disk",
             fix="Verify 3-surgeons installation includes skills/ directory",
+        )
+
+    # Check symlink health in skills directory
+    broken = registrar.check_symlink_health(plugin_root / "skills")
+    if broken:
+        return DiagnosticResult.fail(
+            DiagnosticCode.SKL_BROKEN,
+            f"{len(broken)} broken skill symlink(s)",
+            fix="Run: 3s doctor --probe  # then re-register skills",
         )
 
     return DiagnosticResult.ok(

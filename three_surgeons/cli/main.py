@@ -445,10 +445,12 @@ def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, reve
         return
 
     if revert:
-        from three_surgeons.core.upgrade import TransactionStatus, UpgradeTransaction
+        from three_surgeons.core.upgrade import TransactionStatus, UpgradeEventLog, UpgradeTransaction
         tx = UpgradeTransaction(config_dir)
         if tx.status == TransactionStatus.COMMITTED:
             tx.rollback()
+            event_log = UpgradeEventLog(config_dir / "upgrade.log")
+            event_log.record("revert", details="Manual revert via doctor --revert")
             click.echo("Reverted to previous phase.")
         else:
             click.echo("No committed upgrade snapshot to revert.")
@@ -466,6 +468,7 @@ def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, reve
             "checks": [r.to_dict() for r in results],
             "all_passed": len(failed) == 0,
             "failed": [r.to_dict() for r in failed],
+            "phase": config.phase,
         }
         click.echo(_json.dumps(output, indent=2))
     else:
@@ -1217,22 +1220,27 @@ def migrate_evidence(ctx: click.Context, dry_run: bool, revert: bool) -> None:
 
     migrator = EvidenceMigrator(source_db=db_path)
 
-    if revert:
-        if migrator.revert():
-            click.echo("Reverted to pre-migration snapshot.")
-        else:
-            click.echo("No migration snapshot found.")
-            ctx.exit(1)
-        return
+    try:
+        if revert:
+            if migrator.revert():
+                click.echo("Reverted to pre-migration snapshot.")
+            else:
+                click.echo("No migration snapshot found.")
+                ctx.exit(1)
+            return
 
-    if dry_run:
-        result = migrator.dry_run()
-        click.echo(f"Evidence items: {result.total_items}")
-        click.echo(f"Would migrate: {result.would_migrate}")
-        return
+        if dry_run:
+            result = migrator.dry_run()
+            click.echo(f"Evidence items: {result.total_items}")
+            click.echo(f"Would migrate: {result.would_migrate}")
+            return
 
-    result = migrator.migrate()
-    click.echo(f"Migrated {result.migrated} items. Snapshot created.")
+        # Phase 1: snapshot + backup only. Phase 2 will add shared backend writes.
+        result = migrator.migrate()
+        click.echo(f"Migrated {result.migrated} items. Snapshot created.")
+    except Exception as exc:
+        click.echo(f"Migration error: {exc}", err=True)
+        ctx.exit(1)
 
 
 # -- main entry point -------------------------------------------------------
