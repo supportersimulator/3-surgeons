@@ -339,6 +339,19 @@ class TestDoctorCommand:
             assert "fix" in check, f"Failed check {check['code']} missing fix hint"
 
 
+class TestSetupCheckDiagnostics:
+    """Verify setup-check now includes 3S- codes."""
+
+    def test_setup_check_includes_codes(self) -> None:
+        import json
+        runner = CliRunner()
+        result = runner.invoke(cli, ["setup-check"])
+        data = json.loads(result.output.split("\n--- Setup guidance ---")[0])
+        assert "diagnostics" in data
+        for d in data["diagnostics"]:
+            assert d["code"].startswith("3S-")
+
+
 class TestMainEntryPoint:
     """Test that the main() function exists and is callable."""
 
