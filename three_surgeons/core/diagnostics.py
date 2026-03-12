@@ -46,6 +46,11 @@ class DiagnosticCode(Enum):
     LOC_OK = "3S-LOC-OK"
     LOC_NONE = "3S-LOC-NONE"
 
+    # Skills
+    SKL_OK = "3S-SKL-OK"
+    SKL_NONE = "3S-SKL-NONE"
+    SKL_BROKEN = "3S-SKL-BRK"
+
 
 @dataclass
 class DiagnosticResult:
@@ -141,6 +146,32 @@ def check_local_backends() -> DiagnosticResult:
     )
 
 
+def check_skill_registration(
+    plugin_root: Optional[Path] = None,
+) -> DiagnosticResult:
+    """Check skill discovery and symlink health."""
+    from three_surgeons.core.skill_registration import SkillRegistrar
+
+    if plugin_root is None:
+        # Default: relative to this package
+        plugin_root = Path(__file__).resolve().parent.parent.parent
+
+    registrar = SkillRegistrar(plugin_root)
+    skills = registrar.discover_skills()
+
+    if not skills:
+        return DiagnosticResult.fail(
+            DiagnosticCode.SKL_NONE,
+            "No skills found on disk",
+            fix="Verify 3-surgeons installation includes skills/ directory",
+        )
+
+    return DiagnosticResult.ok(
+        DiagnosticCode.SKL_OK,
+        f"{len(skills)} skills found",
+    )
+
+
 def run_all_checks() -> list[DiagnosticResult]:
     """Run all diagnostic checks, return list of results."""
     return [
@@ -148,4 +179,5 @@ def run_all_checks() -> list[DiagnosticResult]:
         check_mcp_importable(),
         check_config(),
         check_local_backends(),
+        check_skill_registration(),
     ]

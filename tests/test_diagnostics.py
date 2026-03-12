@@ -4,6 +4,8 @@ from __future__ import annotations
 import sys
 from unittest.mock import patch
 
+from pathlib import Path
+
 from three_surgeons.core.diagnostics import (
     DiagnosticCode,
     DiagnosticResult,
@@ -11,6 +13,7 @@ from three_surgeons.core.diagnostics import (
     check_mcp_importable,
     check_config,
     check_local_backends,
+    check_skill_registration,
     run_all_checks,
 )
 
@@ -95,6 +98,25 @@ class TestCheckLocalBackends:
             result = check_local_backends()
             assert result.code == DiagnosticCode.LOC_OK
             assert result.passed
+
+
+class TestCheckSkillRegistration:
+    def test_skills_found(self, tmp_path: Path, monkeypatch) -> None:
+        """Reports OK when skills are discoverable."""
+        skills_dir = tmp_path / "skills"
+        for name in ["probe", "sentinel"]:
+            s = skills_dir / name
+            s.mkdir(parents=True)
+            (s / "SKILL.md").write_text(f"# {name}\n")
+
+        result = check_skill_registration(plugin_root=tmp_path)
+        assert result.passed
+        assert result.code == DiagnosticCode.SKL_OK
+
+    def test_no_skills_dir(self, tmp_path: Path) -> None:
+        result = check_skill_registration(plugin_root=tmp_path)
+        assert not result.passed
+        assert result.code == DiagnosticCode.SKL_NONE
 
 
 class TestRunAllChecks:
