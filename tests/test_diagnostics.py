@@ -132,9 +132,9 @@ class TestCheckSkillRegistration:
         assert not result.passed
         assert result.code == DiagnosticCode.SKL_BROKEN
 
-    def test_filesystem_error(self, tmp_path: Path) -> None:
-        """Reports SKL_BROKEN on filesystem errors."""
-        with patch("three_surgeons.core.skill_registration.SkillRegistrar.discover_skills", side_effect=OSError("boom")):
+    def test_exception_returns_broken(self, tmp_path: Path) -> None:
+        """Reports SKL_BROKEN on any exception, not just OSError."""
+        with patch("three_surgeons.core.skill_registration.SkillRegistrar.discover_skills", side_effect=RuntimeError("unexpected")):
             result = check_skill_registration(plugin_root=tmp_path)
             assert not result.passed
             assert result.code == DiagnosticCode.SKL_BROKEN

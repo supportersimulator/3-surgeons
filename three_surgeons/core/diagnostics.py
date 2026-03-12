@@ -159,11 +159,11 @@ def check_skill_registration(
     try:
         registrar = SkillRegistrar(plugin_root)
         skills = registrar.discover_skills()
-    except OSError:
+    except Exception:
         logger.exception("skill discovery failed")
         return DiagnosticResult.fail(
             DiagnosticCode.SKL_BROKEN,
-            "Skill discovery failed (filesystem error)",
+            "Skill discovery failed",
             fix="Check permissions on skills/ directory",
         )
 
@@ -175,7 +175,11 @@ def check_skill_registration(
         )
 
     # Check symlink health in skills directory
-    broken = registrar.check_symlink_health(plugin_root / "skills")
+    try:
+        broken = registrar.check_symlink_health(plugin_root / "skills")
+    except Exception:
+        logger.exception("symlink health check failed")
+        broken = []
     if broken:
         return DiagnosticResult.fail(
             DiagnosticCode.SKL_BROKEN,
