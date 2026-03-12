@@ -114,3 +114,37 @@ class TestRunAllChecks:
         }
         assert "checks" in output
         assert isinstance(output["all_passed"], bool)
+
+
+class TestDoctorIntegration:
+    """End-to-end: doctor JSON output matches contract from CI."""
+
+    def test_full_contract(self) -> None:
+        """Validates the exact contract CI checks for."""
+        import json
+        from click.testing import CliRunner
+        from three_surgeons.cli.main import cli
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["doctor", "--json"])
+        assert result.exit_code in (0, 1)
+
+        data = json.loads(result.output)
+
+        # Required top-level keys
+        assert "checks" in data
+        assert "all_passed" in data
+        assert "failed" in data
+
+        # All codes follow 3S- pattern
+        for check in data["checks"]:
+            assert check["code"].startswith("3S-"), f"Bad code: {check['code']}"
+            assert isinstance(check["passed"], bool)
+            assert "message" in check
+
+        # Failed checks have fix hints
+        for check in data["failed"]:
+            assert "fix" in check, f"{check['code']} missing fix"
+
+        # Consistency
+        assert data["all_passed"] == (len(data["failed"]) == 0)
