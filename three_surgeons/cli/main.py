@@ -396,19 +396,69 @@ def setup_check(ctx: click.Context) -> None:
 
 @cli.command()
 @click.option("--json", "json_mode", is_flag=True, help="Output structured JSON")
+@click.option("--probe", is_flag=True, help="Run ecosystem probe and show detected phase")
+@click.option("--history", is_flag=True, help="Show upgrade event log")
+@click.option("--revert", is_flag=True, help="Revert to last stable phase")
 @click.pass_context
-def doctor(ctx: click.Context, json_mode: bool) -> None:
+def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, revert: bool) -> None:
     """Diagnose installation health with structured 3S-* error codes.
 
-    Checks Python version, MCP runtime, config files, and local backends.
-    Returns structured output suitable for CI and agent consumption.
+    Checks Python version, MCP runtime, config files, and local backends,
+    and skill registration. Manages upgrade lifecycle.
     """
     import json as _json
 
+    config = ctx.obj["config"]
+    config_dir = Path.home() / ".3surgeons"
+
+    if probe:
+        from three_surgeons.core.upgrade import EcosystemProbe
+        prober = EcosystemProbe()
+        result = prober.run()
+        click.echo(f"Current phase: {config.phase}")
+        click.echo(f"Detected phase: {result.detected_phase}")
+        click.echo(f"Capabilities: {', '.join(c.value for c in result.capabilities) or 'none'}")
+        if result.details:
+            for k, v in result.details.items():
+                click.echo(f"  {k}: {v}")
+        return
+
+    if history:
+        from three_surgeons.core.upgrade import UpgradeEventLog
+        log = UpgradeEventLog(config_dir / "upgrade.log")
+        entries = log.read_all()
+        if not entries:
+            click.echo("No upgrade history.")
+            return
+        click.echo("Upgrade History")
+        click.echo("=" * 40)
+        for entry in entries:
+            ts = entry.get("timestamp", "?")
+            event = entry.get("event", "?")
+            detail = entry.get("details", "")
+            phases = ""
+            if "from_phase" in entry:
+                phases = f" (Phase {entry['from_phase']} -> {entry.get('to_phase', '?')})"
+            click.echo(f"  [{ts}] {event}{phases}")
+            if detail:
+                click.echo(f"    {detail}")
+        return
+
+    if revert:
+        from three_surgeons.core.upgrade import TransactionStatus, UpgradeTransaction
+        tx = UpgradeTransaction(config_dir)
+        if tx.status == TransactionStatus.COMMITTED:
+            tx.rollback()
+            click.echo("Reverted to previous phase.")
+        else:
+            click.echo("No committed upgrade snapshot to revert.")
+            ctx.exit(1)
+        return
+
+    # Default: run diagnostics
     from three_surgeons.core.diagnostics import run_all_checks
 
     results = run_all_checks()
-    passed = [r for r in results if r.passed]
     failed = [r for r in results if not r.passed]
 
     if json_mode:

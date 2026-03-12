@@ -352,6 +352,31 @@ class TestSetupCheckDiagnostics:
             assert d["code"].startswith("3S-")
 
 
+class TestDoctorUpgradeCommands:
+    """Test doctor command upgrade-related flags."""
+
+    def test_doctor_probe(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["doctor", "--probe"])
+        assert result.exit_code in (0, 1)
+        assert "phase" in result.output.lower() or "Phase" in result.output
+
+    def test_doctor_history_empty(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        runner = CliRunner()
+        result = runner.invoke(cli, ["doctor", "--history"])
+        assert result.exit_code == 0
+        # Empty history is OK
+        assert "history" in result.output.lower() or "No" in result.output
+
+    def test_doctor_revert_no_snapshot(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(cli, ["doctor", "--revert"])
+        # Should exit cleanly with message
+        assert result.exit_code in (0, 1)
+        assert "revert" in result.output.lower() or "snapshot" in result.output.lower()
+
+
 class TestMainEntryPoint:
     """Test that the main() function exists and is callable."""
 
