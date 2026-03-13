@@ -34,3 +34,4 @@ gpu.lock
 
 # Audit trail (local runtime data)
 .3s-audit/
+.worktrees/
