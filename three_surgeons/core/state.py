@@ -611,3 +611,35 @@ def create_backend_from_config(state_config: "StateConfig") -> StateBackend:
             return SQLiteBackend(db_path=path)
     else:
         raise ValueError(f"Unknown backend: {backend!r}")
+
+
+def resolve_state_backend(
+    config_resolver: "ConfigResolver",
+    sqlite_fallback_path: str = "~/.3-surgeons/state.db",
+) -> StateBackend:
+    """Create a StateBackend from a ConfigResolver's resolved state config.
+
+    This is the Phase 2 entry point: config cascade → backend instance.
+    Falls back to SQLite if Redis is unavailable.
+    """
+    from three_surgeons.core.config_resolver import ConfigResolver  # avoid circular
+
+    state_config = config_resolver.resolve_state()
+    backend_type = state_config.backend
+
+    if backend_type == "memory":
+        return MemoryBackend()
+    elif backend_type == "redis":
+        try:
+            backend = _RedisBackend(url=state_config.redis_url)
+            if backend.ping():
+                return backend
+            # Redis not responding — fall back
+            return SQLiteBackend(db_path=sqlite_fallback_path)
+        except Exception:
+            return SQLiteBackend(db_path=sqlite_fallback_path)
+    else:
+        path = state_config.sqlite_path
+        if path.startswith("~"):
+            path = str(Path(path).expanduser())
+        return SQLiteBackend(db_path=path)

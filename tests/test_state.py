@@ -360,3 +360,30 @@ class TestHashIncrement:
         backend.hash_set("myhash", "counter", "5")
         assert backend.hash_increment("myhash", "counter") == 6
         assert backend.hash_get("myhash", "counter") == "6"
+
+
+# ── Resolve State Backend Tests ──────────────────────────────────────
+
+
+from unittest.mock import MagicMock, patch
+from three_surgeons.core.config_resolver import ConfigResolver, ResolvedStateConfig
+
+
+class TestResolveStateBackend:
+    def test_resolve_creates_sqlite_by_default(self, tmp_path: Path) -> None:
+        """Default resolver (no Redis, no config) creates SQLiteBackend."""
+        from three_surgeons.core.state import resolve_state_backend
+        resolver = ConfigResolver(config_dir=tmp_path, probe=False)
+        backend = resolve_state_backend(resolver, sqlite_fallback_path=str(tmp_path / "state.db"))
+        assert isinstance(backend, SQLiteBackend)
+        assert backend.ping()
+
+    def test_resolve_creates_memory_from_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ENV override to memory backend."""
+        from three_surgeons.core.state import resolve_state_backend
+        monkeypatch.setenv("THREE_SURGEONS_STATE_BACKEND", "memory")
+        resolver = ConfigResolver(config_dir=tmp_path, probe=False)
+        backend = resolve_state_backend(resolver)
+        assert isinstance(backend, MemoryBackend)
