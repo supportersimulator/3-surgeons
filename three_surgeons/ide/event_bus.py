@@ -1,7 +1,12 @@
-"""EventBus — singleton async-first event bus with ring buffer.
+"""EventBus — singleton sync-first event bus with ring buffer.
 
 Core component of Phase 3 IDE event layer. Transport-agnostic pub/sub
 with wildcard subscriptions, correlation tracking, and error isolation.
+
+Note: Handlers execute synchronously within emit(). A handler that emits
+another event will cause nested/recursive delivery. Current code has no
+cycles, but callers adding new handlers should avoid emit chains that
+could loop.
 """
 from __future__ import annotations
 
@@ -38,7 +43,7 @@ EventHandler = Callable[[EventEnvelope], None]
 
 
 class EventBus:
-    """Singleton-capable async-first event bus with ring buffer.
+    """Singleton-capable sync-first event bus with ring buffer.
 
     Args:
         buffer_size: Max events in ring buffer (default 1000).
