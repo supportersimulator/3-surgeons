@@ -7,29 +7,23 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-_toml_loaded = False
-_tomllib = None
+try:
+    import tomllib as _tomllib
+except ImportError:
+    try:
+        import tomli as _tomllib  # type: ignore[no-redef]
+    except ImportError:
+        _tomllib = None  # type: ignore[assignment]
 
 
 def _load_toml(path: Path) -> Dict[str, Any]:
     """Load a TOML file. Uses tomllib (3.11+) or tomli fallback."""
-    global _toml_loaded, _tomllib
-    if not _toml_loaded:
-        try:
-            import tomllib as _tomllib
-        except ImportError:
-            try:
-                import tomli as _tomllib
-            except ImportError:
-                _tomllib = None
-        _toml_loaded = True
-
     if _tomllib is None:
         return _parse_simple_toml(path)
 
@@ -81,11 +75,7 @@ class ResolvedContextDNAConfig:
     """Resolved ContextDNA integration configuration."""
     url: str = "http://localhost:8029"
     enabled: bool = False
-    capabilities: Dict[str, Any] = None
-
-    def __post_init__(self) -> None:
-        if self.capabilities is None:
-            self.capabilities = {}
+    capabilities: Dict[str, Any] = field(default_factory=dict)
 
 
 class ConfigResolver:
