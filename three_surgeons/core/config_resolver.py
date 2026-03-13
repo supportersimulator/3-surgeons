@@ -108,19 +108,44 @@ class ConfigResolver:
                 logger.warning("Failed to parse %s", self._config_path, exc_info=True)
                 self._toml_data = None
 
+    def _probe_redis(self) -> bool:
+        """Probe Redis on localhost:6379 with PING."""
+        try:
+            import redis
+            client = redis.Redis(host="127.0.0.1", port=6379, socket_timeout=2.0)
+            return client.ping()
+        except Exception:
+            return False
+
+    def _probe_contextdna(self) -> bool:
+        """Probe ContextDNA on localhost:8029/health."""
+        try:
+            import httpx
+            resp = httpx.get("http://127.0.0.1:8029/health", timeout=2.0)
+            return resp.status_code == 200
+        except Exception:
+            return False
+
     def resolve_state(self) -> ResolvedStateConfig:
         """Resolve state backend config via cascade."""
         config = ResolvedStateConfig()
+        has_toml_backend = False
 
         # Layer 1: TOML defaults
         if self._toml_data and "state" in self._toml_data:
             section = self._toml_data["state"]
             if "backend" in section:
                 config.backend = section["backend"]
+                has_toml_backend = True
             if "redis_url" in section:
                 config.redis_url = section["redis_url"]
             if "sqlite_path" in section:
                 config.sqlite_path = section["sqlite_path"]
+
+        # Layer 0.5: Convention probing (only if no explicit TOML backend)
+        if self._probe and not has_toml_backend:
+            if self._probe_redis():
+                config.backend = "redis"
 
         # Layer 0: ENV overrides (highest priority)
         env_redis = os.environ.get("THREE_SURGEONS_REDIS_URL")
@@ -162,6 +187,7 @@ class ConfigResolver:
     def resolve_contextdna(self) -> ResolvedContextDNAConfig:
         """Resolve ContextDNA integration config via cascade."""
         config = ResolvedContextDNAConfig()
+        has_toml_enabled = False
 
         # Layer 1: TOML
         if self._toml_data and "contextdna" in self._toml_data:
@@ -170,6 +196,12 @@ class ConfigResolver:
                 config.url = section["url"]
             if "enabled" in section:
                 config.enabled = bool(section["enabled"])
+                has_toml_enabled = True
+
+        # Convention probe (only if no explicit TOML setting)
+        if self._probe and not has_toml_enabled:
+            if self._probe_contextdna():
+                config.enabled = True
 
         # Layer 0: ENV
         env_url = os.environ.get("THREE_SURGEONS_CONTEXTDNA_URL")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -117,3 +118,36 @@ class TestWriteToml:
         assert state.backend == "sqlite"
         queue = resolver2.resolve_queue()
         assert queue.backend == "redis"
+
+
+class TestConventionProbing:
+    def test_redis_probe_succeeds(self, tmp_path: Path) -> None:
+        """When probe=True and Redis responds to PING, backend upgrades to redis."""
+        with patch("three_surgeons.core.config_resolver.ConfigResolver._probe_redis", return_value=True):
+            resolver = ConfigResolver(config_dir=tmp_path, probe=True)
+            state = resolver.resolve_state()
+            assert state.backend == "redis"
+
+    def test_redis_probe_fails_keeps_sqlite(self, tmp_path: Path) -> None:
+        """When probe=True but Redis is down, backend stays sqlite."""
+        with patch("three_surgeons.core.config_resolver.ConfigResolver._probe_redis", return_value=False):
+            resolver = ConfigResolver(config_dir=tmp_path, probe=True)
+            state = resolver.resolve_state()
+            assert state.backend == "sqlite"
+
+    def test_contextdna_probe_succeeds(self, tmp_path: Path) -> None:
+        """When ContextDNA responds to /health, it's enabled."""
+        with patch("three_surgeons.core.config_resolver.ConfigResolver._probe_redis", return_value=False), \
+             patch("three_surgeons.core.config_resolver.ConfigResolver._probe_contextdna", return_value=True):
+            resolver = ConfigResolver(config_dir=tmp_path, probe=True)
+            cdna = resolver.resolve_contextdna()
+            assert cdna.enabled is True
+
+    def test_toml_beats_probe(self, tmp_path: Path) -> None:
+        """TOML explicit config takes priority over probe results."""
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[state]\nbackend = "sqlite"\n')
+        with patch("three_surgeons.core.config_resolver.ConfigResolver._probe_redis", return_value=True):
+            resolver = ConfigResolver(config_dir=tmp_path, probe=True)
+            state = resolver.resolve_state()
+            assert state.backend == "sqlite"
