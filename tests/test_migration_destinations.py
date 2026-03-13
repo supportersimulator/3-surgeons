@@ -167,3 +167,60 @@ class TestEvidenceMigratorWithDestination:
 
         assert result.executed is False
         assert len(dest.items) == 0
+
+
+class TestContextDNAMigrationDestination:
+    def test_write_batch_posts_to_api(self) -> None:
+        """ContextDNA destination POSTs to evidence API endpoint."""
+        from three_surgeons.core.migration import ContextDNAMigrationDestination
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"stored": 2}
+        mock_client.post.return_value = mock_response
+
+        dest = ContextDNAMigrationDestination(
+            client=mock_client,
+            evidence_endpoint="http://localhost:8029/api/evidence",
+        )
+        items = [
+            {"key": "k1", "value": "v1", "grade": "anecdotal"},
+            {"key": "k2", "value": "v2", "grade": "case_series"},
+        ]
+        count = dest.write_batch(items)
+        assert count == 2
+        mock_client.post.assert_called_once()
+
+    def test_verify_fetches_and_compares(self) -> None:
+        from three_surgeons.core.migration import ContextDNAMigrationDestination
+
+        item = {"key": "k1", "value": "v1", "grade": "anecdotal"}
+        expected = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"items": [item]}
+        mock_client.get.return_value = mock_response
+
+        dest = ContextDNAMigrationDestination(
+            client=mock_client,
+            evidence_endpoint="http://localhost:8029/api/evidence",
+        )
+        assert dest.verify({"k1": expected}) is True
+
+    def test_clear_calls_delete_endpoint(self) -> None:
+        from three_surgeons.core.migration import ContextDNAMigrationDestination
+
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_client.delete.return_value = mock_response
+
+        dest = ContextDNAMigrationDestination(
+            client=mock_client,
+            evidence_endpoint="http://localhost:8029/api/evidence",
+        )
+        dest.clear()
+        mock_client.delete.assert_called_once()

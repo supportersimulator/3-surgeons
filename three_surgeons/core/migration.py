@@ -110,6 +110,47 @@ class RedisMigrationDestination:
             self._client.delete(key)
 
 
+class ContextDNAMigrationDestination:
+    """Writes evidence via ContextDNA evidence API.
+
+    Uses capability-negotiated endpoint for evidence storage.
+    Preserves grade ladder (UP-ONLY) during migration.
+    """
+
+    def __init__(self, client: Any, evidence_endpoint: str) -> None:
+        self._client = client
+        self._endpoint = evidence_endpoint.rstrip("/")
+
+    def write_batch(self, items: List[Dict[str, Any]]) -> int:
+        resp = self._client.post(
+            f"{self._endpoint}/batch",
+            json={"items": items},
+        )
+        if resp.status_code == 200:
+            return len(items)
+        return 0
+
+    def verify(self, checksums: Dict[str, str]) -> bool:
+        for key, expected in checksums.items():
+            resp = self._client.get(f"{self._endpoint}/{key}")
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            items = data.get("items", [data]) if isinstance(data, dict) else [data]
+            for item in items:
+                if item.get("key") == key:
+                    computed = hashlib.sha256(
+                        json.dumps(item, sort_keys=True).encode()
+                    ).hexdigest()
+                    if computed != expected:
+                        return False
+                    break
+        return True
+
+    def clear(self) -> None:
+        self._client.delete(f"{self._endpoint}/migrated")
+
+
 class EvidenceMigrator:
     """Migrates evidence between local SQLite and shared backends.
 
