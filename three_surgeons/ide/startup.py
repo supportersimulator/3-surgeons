@@ -41,6 +41,14 @@ def create_event_bus(config: Optional[EventBusConfig] = None) -> EventBus:
         bus.register_transport(JSONLTransport(config.jsonl_path))
         logger.info("Registered JSONL transport: %s", config.jsonl_path)
 
+    # WebSocket transport
+    if config.enable_websocket:
+        from three_surgeons.ide.transports.websocket import WebSocketTransport
+        ws = WebSocketTransport(host=config.ws_host, port=config.ws_port)
+        ws.set_bus(bus)
+        bus.register_transport(ws)
+        logger.info("Registered WebSocket transport on %s:%d", config.ws_host, config.ws_port)
+
     # SSE transport
     if config.enable_sse:
         from three_surgeons.ide.transports.sse import SSETransport
