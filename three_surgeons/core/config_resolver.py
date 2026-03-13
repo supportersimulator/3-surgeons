@@ -32,7 +32,10 @@ def _load_toml(path: Path) -> Dict[str, Any]:
 
 
 def _parse_simple_toml(path: Path) -> Dict[str, Any]:
-    """Minimal TOML parser for [section] + key = "value" patterns."""
+    """Minimal TOML parser for [section] + key = "value" patterns.
+
+    Supports top-level keys (before any section header) stored under "__top__".
+    """
     result: Dict[str, Any] = {}
     current_section: Optional[str] = None
     for line in path.read_text().splitlines():
@@ -42,7 +45,7 @@ def _parse_simple_toml(path: Path) -> Dict[str, Any]:
         if line.startswith("[") and line.endswith("]"):
             current_section = line[1:-1].strip()
             result[current_section] = {}
-        elif "=" in line and current_section:
+        elif "=" in line:
             key, _, val = line.partition("=")
             key = key.strip()
             val = val.strip().strip('"').strip("'")
@@ -50,7 +53,8 @@ def _parse_simple_toml(path: Path) -> Dict[str, Any]:
                 val = True
             elif val.lower() == "false":
                 val = False
-            result[current_section][key] = val
+            target = result.setdefault(current_section or "__top__", {})
+            target[key] = val
     return result
 
 
@@ -101,12 +105,18 @@ class ConfigResolver:
 
     def _load_toml_file(self) -> None:
         """Load TOML config file if it exists."""
-        if self._config_path.is_file():
-            try:
-                self._toml_data = _load_toml(self._config_path)
-            except Exception:
-                logger.warning("Failed to parse %s", self._config_path, exc_info=True)
-                self._toml_data = None
+        if not self._config_path.is_file():
+            logger.debug("No config file at %s", self._config_path)
+            return
+        try:
+            self._toml_data = _load_toml(self._config_path)
+        except Exception:
+            logger.error(
+                "Malformed config file at %s — using defaults. Fix or delete the file.",
+                self._config_path,
+                exc_info=True,
+            )
+            self._toml_data = None
 
     def _probe_redis(self) -> bool:
         """Probe Redis on localhost:6379 with PING."""

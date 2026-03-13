@@ -12,6 +12,7 @@ import os
 import random
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Protocol, Tuple, runtime_checkable
 
@@ -82,6 +83,7 @@ class GPULock:
         self._lock_dir = Path(lock_dir)
         self._lock_path = self._lock_dir / self.LOCK_FILENAME
         self._held = False
+        self._caller: Optional[str] = None
 
     def acquire(self, timeout: float = 5.0) -> bool:
         """Try to acquire the GPU lock within *timeout* seconds.
@@ -134,6 +136,7 @@ class GPULock:
         """Attempt to atomically create the lock file with our PID.
 
         Uses O_CREAT | O_EXCL for atomic creation (fails if file exists).
+        Writes JSON metadata: pid, timestamp, caller for debuggability.
         """
         try:
             fd = os.open(
@@ -141,7 +144,12 @@ class GPULock:
                 os.O_CREAT | os.O_EXCL | os.O_WRONLY,
                 0o644,
             )
-            os.write(fd, str(os.getpid()).encode())
+            metadata = _json.dumps({
+                "pid": os.getpid(),
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "caller": self._caller or "",
+            })
+            os.write(fd, metadata.encode())
             os.close(fd)
             return True
         except FileExistsError:
@@ -153,19 +161,23 @@ class GPULock:
         """Check if the current lock holder is dead. If so, remove the lock file.
 
         Returns True if a stale lock was removed (caller should retry _try_lock).
+        Parses JSON metadata or falls back to plain PID for backward compat.
         """
         try:
-            pid_str = self._lock_path.read_text().strip()
-            if not pid_str:
-                # Empty lock file -- treat as stale
+            content = self._lock_path.read_text().strip()
+            if not content:
                 self._lock_path.unlink(missing_ok=True)
                 return True
-            pid = int(pid_str)
+            # Try JSON first (new format), fall back to plain PID
+            try:
+                data = _json.loads(content)
+                pid = int(data["pid"])
+            except (ValueError, KeyError, TypeError):
+                pid = int(content)
             if not _is_pid_alive(pid):
                 self._lock_path.unlink(missing_ok=True)
                 return True
         except (OSError, ValueError):
-            # Can't read or parse -- try to remove as stale
             try:
                 self._lock_path.unlink(missing_ok=True)
                 return True
@@ -193,6 +205,7 @@ class FileLockBackend:
         self._caller: Optional[str] = None
 
     def acquire(self, priority: int = 4, caller: str = "", timeout: float = 5.0) -> bool:
+        self._lock._caller = caller
         result = self._lock.acquire(timeout=timeout)
         if result:
             self._caller = caller
@@ -207,8 +220,13 @@ class FileLockBackend:
         if not lock_path.exists():
             return (False, None)
         try:
-            pid_str = lock_path.read_text().strip()
-            return (True, f"pid:{pid_str}")
+            content = lock_path.read_text().strip()
+            try:
+                data = _json.loads(content)
+                info = f"pid:{data.get('pid')} caller:{data.get('caller', '')} since:{data.get('ts', '')}"
+                return (True, info)
+            except (ValueError, TypeError):
+                return (True, f"pid:{content}")
         except OSError:
             return (True, None)
 
