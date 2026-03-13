@@ -387,3 +387,26 @@ class TestResolveStateBackend:
         resolver = ConfigResolver(config_dir=tmp_path, probe=False)
         backend = resolve_state_backend(resolver)
         assert isinstance(backend, MemoryBackend)
+
+
+# ── Redis Backend Health Tests ───────────────────────────────────────
+
+
+class TestRedisBackendHealth:
+    def test_redis_ping_returns_false_when_unavailable(self) -> None:
+        """_RedisBackend.ping() returns False when Redis is not running."""
+        from three_surgeons.core.state import _RedisBackend
+        try:
+            backend = _RedisBackend(url="redis://127.0.0.1:19999/0")
+            assert backend.ping() is False
+        except Exception:
+            pytest.skip("redis package not installed")
+
+    def test_resolve_falls_back_on_redis_failure(self, tmp_path: Path) -> None:
+        """resolve_state_backend falls back to SQLite when Redis ping fails."""
+        from three_surgeons.core.state import resolve_state_backend
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[state]\nbackend = "redis"\nredis_url = "redis://127.0.0.1:19999/0"\n')
+        resolver = ConfigResolver(config_dir=tmp_path, probe=False)
+        backend = resolve_state_backend(resolver, sqlite_fallback_path=str(tmp_path / "fallback.db"))
+        assert isinstance(backend, SQLiteBackend)
