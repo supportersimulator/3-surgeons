@@ -7,7 +7,9 @@ generation profiles, and <think> tag extraction.
 from __future__ import annotations
 
 import enum
+import json as _json
 import os
+import random
 import re
 import time
 from pathlib import Path
@@ -216,6 +218,83 @@ class FileLockBackend:
     def renew(self, caller: str, extend_s: float) -> bool:
         # File locks don't have TTL — renew is a no-op success if held
         return self._lock._held
+
+
+class RedisLockBackend:
+    """Redis-based LockBackend using SETNX + TTL.
+
+    PID stored in lock value for liveness check.
+    Priority yielding via gpu_urgent flag.
+    """
+
+    DEFAULT_TTL = 300  # 5 minutes
+
+    def __init__(
+        self,
+        client: Any = None,
+        key_prefix: str = "3surgeons:gpu_lock",
+        ttl: int = 300,
+    ) -> None:
+        self._client = client
+        self._key = key_prefix
+        self._urgent_key = f"{key_prefix}:urgent"
+        self._ttl = ttl
+        self._held = False
+        self._caller: Optional[str] = None
+
+    def acquire(self, priority: int = 4, caller: str = "", timeout: float = 5.0) -> bool:
+        value = _json.dumps({"pid": os.getpid(), "caller": caller, "priority": priority})
+        deadline = time.monotonic() + timeout
+        backoff = 0.1
+
+        while True:
+            if self._client.set(self._key, value, nx=True, ex=self._ttl):
+                self._held = True
+                self._caller = caller
+                if priority <= 2:
+                    self._client.set(self._urgent_key, "1", ex=self._ttl)
+                return True
+
+            if time.monotonic() >= deadline:
+                return False
+
+            jitter = random.uniform(0, 0.4)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(backoff + jitter, remaining))
+            backoff = min(backoff * 1.5, 2.0)
+
+    def release(self, caller: str = "") -> None:
+        if self._held:
+            self._client.delete(self._key)
+            self._client.delete(self._urgent_key)
+            self._held = False
+            self._caller = None
+
+    def is_locked(self) -> Tuple[bool, Optional[str]]:
+        value = self._client.get(self._key)
+        if value is None:
+            return (False, None)
+        try:
+            data = _json.loads(value) if isinstance(value, str) else _json.loads(value.decode())
+            return (True, f"pid:{data.get('pid')} caller:{data.get('caller')}")
+        except (ValueError, AttributeError):
+            return (True, str(value))
+
+    def health_check(self) -> bool:
+        try:
+            return self._client.ping()
+        except Exception:
+            return False
+
+    def renew(self, caller: str, extend_s: float) -> bool:
+        if not self._held:
+            return False
+        try:
+            return bool(self._client.expire(self._key, int(extend_s)))
+        except Exception:
+            return False
 
 
 class GenerationProfiles:
