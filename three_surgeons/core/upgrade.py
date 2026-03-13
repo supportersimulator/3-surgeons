@@ -123,9 +123,25 @@ class EcosystemProbe:
             return False
 
     def _check_ide_event_bus(self) -> bool:
-        """Check for IDE event bus (Phase 3)."""
+        """Check for IDE event bus (Phase 3).
+
+        Tries WebSocket handshake first (primary transport), falls back
+        to HTTP GET for SSE transport compatibility.
+        """
         if os.environ.get("CONTEXTDNA_IDE_BUS"):
             return True
+        # Try WebSocket handshake (primary Phase 3 transport)
+        try:
+            import websockets.sync.client  # type: ignore[import-untyped]
+            with websockets.sync.client.connect(
+                "ws://127.0.0.1:8031/events",
+                open_timeout=self._timeout,
+                close_timeout=self._timeout,
+            ):
+                return True
+        except Exception:
+            logger.debug("WebSocket probe failed, trying HTTP", exc_info=True)
+        # Fall back to HTTP (SSE transport or health endpoint)
         try:
             resp = httpx.get(
                 "http://127.0.0.1:8031/health",

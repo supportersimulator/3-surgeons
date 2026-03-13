@@ -586,6 +586,36 @@ try:
         """Show upgrade event log."""
         return _upgrade_history_impl()
 
+    # ── Phase 3: IDE Event Bus tools ───────────────────────────────────
+
+    @_mcp_app.tool()
+    def event_subscribe(patterns: list[str]) -> dict:
+        """Subscribe to event bus patterns. Returns stream_id for polling."""
+        from three_surgeons.ide.event_bus import EventBus
+        from three_surgeons.mcp.event_tools import event_subscribe as _subscribe
+        return _subscribe(EventBus.get_instance(), patterns)
+
+    @_mcp_app.tool()
+    def event_unsubscribe(stream_id: str) -> dict:
+        """Unsubscribe from an event stream by stream_id."""
+        from three_surgeons.ide.event_bus import EventBus
+        from three_surgeons.mcp.event_tools import event_unsubscribe as _unsubscribe
+        return _unsubscribe(EventBus.get_instance(), stream_id)
+
+    @_mcp_app.tool()
+    def event_publish(event_type: str, payload: dict | None = None, correlation_id: str | None = None) -> dict:
+        """Publish an event to the IDE event bus."""
+        from three_surgeons.ide.event_bus import EventBus
+        from three_surgeons.mcp.event_tools import event_publish as _publish
+        return _publish(EventBus.get_instance(), event_type, payload, correlation_id)
+
+    @_mcp_app.tool()
+    def event_poll(stream_id: str) -> dict:
+        """Poll for events on a subscription stream. Returns and clears queued events."""
+        from three_surgeons.ide.event_bus import EventBus
+        from three_surgeons.mcp.event_tools import event_poll as _poll
+        return _poll(EventBus.get_instance(), stream_id)
+
 except ImportError:
     # mcp SDK not installed -- tools are still usable as plain functions
     logger.info("mcp SDK not installed; MCP server will not start. Tools available as plain functions.")
