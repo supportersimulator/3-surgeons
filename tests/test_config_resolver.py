@@ -151,3 +151,45 @@ class TestConventionProbing:
             resolver = ConfigResolver(config_dir=tmp_path, probe=True)
             state = resolver.resolve_state()
             assert state.backend == "sqlite"
+
+
+class TestCapabilityNegotiation:
+    def test_fetch_capabilities_success(self, tmp_path: Path) -> None:
+        """Successful GET /capabilities populates capabilities dict."""
+        mock_response = {
+            "version": "1.0",
+            "features": ["evidence_store", "priority_queue"],
+            "phase_support": [1, 2],
+            "endpoints": {
+                "evidence": "/api/evidence",
+                "capabilities": "/capabilities",
+            },
+        }
+        with patch("three_surgeons.core.config_resolver.ConfigResolver._fetch_capabilities",
+                    return_value=mock_response):
+            resolver = ConfigResolver(config_dir=tmp_path, probe=False)
+            caps = resolver.negotiate_capabilities("http://localhost:8029")
+            assert caps["version"] == "1.0"
+            assert "evidence_store" in caps["features"]
+
+    def test_fetch_capabilities_timeout(self, tmp_path: Path) -> None:
+        """Timeout returns empty capabilities (graceful degradation)."""
+        with patch("three_surgeons.core.config_resolver.ConfigResolver._fetch_capabilities",
+                    return_value=None):
+            resolver = ConfigResolver(config_dir=tmp_path, probe=False)
+            caps = resolver.negotiate_capabilities("http://localhost:8029")
+            assert caps is None
+
+    def test_has_capability(self, tmp_path: Path) -> None:
+        """Check specific feature from capability response."""
+        mock_caps = {
+            "version": "1.0",
+            "features": ["evidence_store", "webhook_injection"],
+            "endpoints": {},
+        }
+        with patch("three_surgeons.core.config_resolver.ConfigResolver._fetch_capabilities",
+                    return_value=mock_caps):
+            resolver = ConfigResolver(config_dir=tmp_path, probe=False)
+            caps = resolver.negotiate_capabilities("http://localhost:8029")
+            assert resolver.has_capability(caps, "evidence_store") is True
+            assert resolver.has_capability(caps, "priority_queue") is False

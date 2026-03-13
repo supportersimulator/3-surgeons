@@ -211,6 +211,32 @@ class ConfigResolver:
 
         return config
 
+    def _fetch_capabilities(self, url: str) -> Optional[Dict[str, Any]]:
+        """GET /capabilities from a backend service."""
+        try:
+            import httpx
+            resp = httpx.get(f"{url.rstrip('/')}/capabilities", timeout=3.0)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            logger.debug("Capability fetch failed for %s", url, exc_info=True)
+        return None
+
+    def negotiate_capabilities(self, url: str) -> Optional[Dict[str, Any]]:
+        """Negotiate capabilities with a backend service.
+
+        Returns the capability response dict, or None if the service
+        doesn't respond or doesn't support the protocol.
+        """
+        return self._fetch_capabilities(url)
+
+    @staticmethod
+    def has_capability(caps: Optional[Dict[str, Any]], feature: str) -> bool:
+        """Check if a capability response includes a specific feature."""
+        if caps is None:
+            return False
+        return feature in caps.get("features", [])
+
     def write_toml(self, updates: Dict[str, Dict[str, Any]]) -> None:
         """Write/update sections in config.toml.
 
