@@ -395,3 +395,30 @@ class TestNudgeDetector:
             nudge_enabled=False,
         )
         assert not detector.should_nudge()
+
+
+class TestEcosystemProbeWithResolver:
+    def test_probe_uses_resolver_when_provided(self, tmp_path: Path) -> None:
+        """EcosystemProbe can accept a ConfigResolver for cascade-based detection."""
+        from three_surgeons.core.config_resolver import ConfigResolver
+
+        config_file = tmp_path / "config.toml"
+        config_file.write_text('[state]\nbackend = "redis"\nredis_url = "redis://test:6379/0"\n')
+        resolver = ConfigResolver(config_dir=tmp_path, probe=False)
+
+        with patch.object(EcosystemProbe, "_check_redis", return_value=True), \
+             patch.object(EcosystemProbe, "_check_contextdna", return_value=False), \
+             patch("three_surgeons.core.config.detect_local_backend", return_value=[]):
+            probe = EcosystemProbe(config_resolver=resolver)
+            result = probe.run()
+            assert InfraCapability.REDIS in result.capabilities
+            assert result.detected_phase >= 2
+
+    def test_probe_without_resolver_still_works(self) -> None:
+        """Backward compat: EcosystemProbe works without resolver."""
+        with patch.object(EcosystemProbe, "_check_redis", return_value=False), \
+             patch.object(EcosystemProbe, "_check_contextdna", return_value=False), \
+             patch("three_surgeons.core.config.detect_local_backend", return_value=[]):
+            probe = EcosystemProbe()
+            result = probe.run()
+            assert result.detected_phase == 1

@@ -52,8 +52,13 @@ class EcosystemProbe:
     Determines the highest phase the system can support.
     """
 
-    def __init__(self, timeout: float = 2.0) -> None:
+    def __init__(
+        self,
+        timeout: float = 2.0,
+        config_resolver: Optional["ConfigResolver"] = None,
+    ) -> None:
         self._timeout = timeout
+        self._config_resolver = config_resolver
 
     def run(self) -> ProbeResult:
         """Run all probes and determine detected phase."""
@@ -89,10 +94,15 @@ class EcosystemProbe:
         return result
 
     def _check_redis(self) -> bool:
-        """Ping Redis on default port."""
+        """Ping Redis. Uses resolver's URL if available, else default port."""
+        url = "redis://127.0.0.1:6379/0"
+        if self._config_resolver:
+            state = self._config_resolver.resolve_state()
+            if state.backend == "redis":
+                url = state.redis_url
         try:
             import redis
-            client = redis.Redis(host="127.0.0.1", port=6379, socket_timeout=self._timeout)
+            client = redis.Redis.from_url(url, socket_timeout=self._timeout)
             return client.ping()
         except Exception:
             logger.debug("Redis probe failed", exc_info=True)
