@@ -11,10 +11,38 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Protocol, Tuple, runtime_checkable
 
 # Qwen3 native thinking mode: responses may contain <think>...</think> blocks
 _THINK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+@runtime_checkable
+class LockBackend(Protocol):
+    """Protocol for GPU/resource lock backends.
+
+    Implementations: FileLockBackend (Phase 1), RedisLockBackend (Phase 2).
+    """
+
+    def acquire(self, priority: int = 4, caller: str = "", timeout: float = 5.0) -> bool:
+        """Acquire the lock. Returns True if acquired within timeout."""
+        ...
+
+    def release(self, caller: str = "") -> None:
+        """Release the lock."""
+        ...
+
+    def is_locked(self) -> Tuple[bool, Optional[str]]:
+        """Check lock status. Returns (is_locked, holder_info)."""
+        ...
+
+    def health_check(self) -> bool:
+        """Check if the lock backend is healthy."""
+        ...
+
+    def renew(self, caller: str, extend_s: float) -> bool:
+        """Extend the lock TTL. Returns True if renewed."""
+        ...
 
 
 class Priority(enum.IntEnum):
@@ -150,6 +178,44 @@ class GPULock:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.release()
+
+
+class FileLockBackend:
+    """Adapts GPULock to the LockBackend protocol.
+
+    Wraps the existing file-based GPU lock for Phase 1 compatibility.
+    """
+
+    def __init__(self, lock_dir: Path) -> None:
+        self._lock = GPULock(lock_dir=lock_dir)
+        self._caller: Optional[str] = None
+
+    def acquire(self, priority: int = 4, caller: str = "", timeout: float = 5.0) -> bool:
+        result = self._lock.acquire(timeout=timeout)
+        if result:
+            self._caller = caller
+        return result
+
+    def release(self, caller: str = "") -> None:
+        self._lock.release()
+        self._caller = None
+
+    def is_locked(self) -> Tuple[bool, Optional[str]]:
+        lock_path = self._lock._lock_path
+        if not lock_path.exists():
+            return (False, None)
+        try:
+            pid_str = lock_path.read_text().strip()
+            return (True, f"pid:{pid_str}")
+        except OSError:
+            return (True, None)
+
+    def health_check(self) -> bool:
+        return self._lock._lock_dir.exists()
+
+    def renew(self, caller: str, extend_s: float) -> bool:
+        # File locks don't have TTL — renew is a no-op success if held
+        return self._lock._held
 
 
 class GenerationProfiles:
