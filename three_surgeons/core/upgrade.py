@@ -123,9 +123,18 @@ class EcosystemProbe:
             return False
 
     def _check_ide_event_bus(self) -> bool:
-        """Check for IDE event bus (future -- Phase 3)."""
-        # Phase 3: check for Electron IPC or event bus socket
-        return os.environ.get("CONTEXTDNA_IDE_BUS") is not None
+        """Check for IDE event bus (Phase 3)."""
+        if os.environ.get("CONTEXTDNA_IDE_BUS"):
+            return True
+        try:
+            resp = httpx.get(
+                "http://127.0.0.1:8031/health",
+                timeout=self._timeout,
+            )
+            return resp.status_code == 200
+        except Exception:
+            logger.debug("IDE event bus probe failed", exc_info=True)
+            return False
 
 
 class ConfigTracker:
@@ -485,3 +494,14 @@ class NudgeDetector:
         if self._config_edit_count > self.CONFIG_EDIT_THRESHOLD:
             reasons.append(f"{self._config_edit_count} config edits (>{self.CONFIG_EDIT_THRESHOLD})")
         return "Power user thresholds reached: " + ", ".join(reasons) if reasons else ""
+
+
+class UpgradeChecker:
+    """Convenience wrapper around EcosystemProbe for simple phase detection."""
+
+    def __init__(self, timeout: float = 2.0) -> None:
+        self._probe = EcosystemProbe(timeout=timeout)
+
+    def check(self) -> ProbeResult:
+        """Run ecosystem probe and return result."""
+        return self._probe.run()
