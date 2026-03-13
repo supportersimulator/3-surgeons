@@ -47,7 +47,7 @@ class TestFileLockBackend:
         lock.release(caller="test")  # Should not raise
 
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 class TestRedisLockBackend:

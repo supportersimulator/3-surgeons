@@ -292,7 +292,7 @@ class RedisLockBackend:
         if not self._held:
             return False
         try:
-            return bool(self._client.expire(self._key, int(extend_s)))
+            return bool(self._client.expire(self._key, max(1, int(extend_s))))
         except Exception:
             return False
 
