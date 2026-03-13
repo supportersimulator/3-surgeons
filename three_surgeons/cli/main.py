@@ -399,8 +399,9 @@ def setup_check(ctx: click.Context) -> None:
 @click.option("--probe", is_flag=True, help="Run ecosystem probe and show detected phase")
 @click.option("--history", is_flag=True, help="Show upgrade event log")
 @click.option("--revert", is_flag=True, help="Revert to last stable phase")
+@click.option("--upgrade", "do_upgrade", is_flag=True, help="Run integration depth chooser")
 @click.pass_context
-def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, revert: bool) -> None:
+def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, revert: bool, do_upgrade: bool) -> None:
     """Diagnose installation health with structured 3S-* error codes.
 
     Checks Python version, MCP runtime, config files, and local backends,
@@ -455,6 +456,37 @@ def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, reve
         else:
             click.echo("No committed upgrade snapshot to revert.")
             ctx.exit(1)
+        return
+
+    if do_upgrade:
+        from three_surgeons.core.config_resolver import ConfigResolver
+        from three_surgeons.core.chooser import choose_integration_depth
+
+        resolver = ConfigResolver(probe=True)
+        state = resolver.resolve_state()
+        cdna = resolver.resolve_contextdna()
+
+        # Capability negotiation
+        caps = {}
+        if cdna.enabled:
+            caps = resolver.negotiate_capabilities(cdna.url) or {}
+
+        plan = choose_integration_depth(
+            capabilities=caps,
+            redis_available=(state.backend == "redis" or resolver._probe_redis()),
+            contextdna_available=cdna.enabled,
+        )
+
+        if plan is None:
+            click.echo("No shared backends detected. Staying on Phase 1.")
+            return
+
+        click.echo(f"\nRecommended: {plan.depth.value.upper()}")
+        click.echo(f"  {plan.description}")
+        click.echo(f"\nAvailable options: {', '.join(d.value for d in plan.available_depths)}")
+        click.echo(f"\nConfig changes ({len(plan.config_changes)}):")
+        for change in plan.config_changes:
+            click.echo(f"  [{change['section']}] {change['key']} = {change['value']}")
         return
 
     # Default: run diagnostics
