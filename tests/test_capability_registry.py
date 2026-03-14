@@ -349,3 +349,50 @@ class TestUpgradeEngineIntegration:
         reg.apply_probe(ProbeResult(detected_phase=1, capabilities=[]))
         entries = log.read_all()
         assert any(e["event"] == "capability_downgrade" for e in entries)
+
+
+from three_surgeons.ide.event_bus import EventBus
+
+
+class TestEventBusIntegration:
+    @pytest.fixture(autouse=True)
+    def _reset_bus(self):
+        yield
+        EventBus.reset_instance()
+
+    def test_set_level_emits_event(self):
+        bus = EventBus.get_instance()
+        received = []
+        bus.on("capability.*", lambda e: received.append(e))
+
+        reg = CapabilityRegistry(event_bus=bus)
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="Redis up")
+
+        assert len(received) == 1
+        assert received[0].type == "capability.changed"
+        assert received[0].payload["capability"] == "evidence_store"
+        assert received[0].payload["new_level"] == 2
+
+    def test_no_event_when_level_unchanged(self):
+        bus = EventBus.get_instance()
+        received = []
+        bus.on("capability.*", lambda e: received.append(e))
+
+        reg = CapabilityRegistry(event_bus=bus)
+        reg.set_level(Capability.EVIDENCE_STORE, 1, reason="already L1")
+
+        assert len(received) == 0
+
+    def test_posture_change_emits_event(self):
+        bus = EventBus.get_instance()
+        received = []
+        bus.on("posture.*", lambda e: received.append(e))
+
+        reg = CapabilityRegistry(event_bus=bus)
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="setup")
+        reg.accept_current_as_baseline()
+        reg.set_level(Capability.EVIDENCE_STORE, 1, reason="Redis died")
+
+        posture_events = [e for e in received if e.type == "posture.changed"]
+        assert len(posture_events) >= 1
+        assert posture_events[-1].payload["posture"] == "degraded"

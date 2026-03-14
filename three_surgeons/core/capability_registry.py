@@ -66,13 +66,18 @@ class CapabilityRegistry:
 
     RECOVERY_PROBES_REQUIRED = 3
 
-    def __init__(self, event_log: Optional["UpgradeEventLog"] = None) -> None:
+    def __init__(
+        self,
+        event_log: Optional["UpgradeEventLog"] = None,
+        event_bus: Optional["EventBus"] = None,
+    ) -> None:
         self._state: Dict[Capability, int] = {cap: 1 for cap in Capability}
         self._previous: Dict[Capability, int] = {cap: 1 for cap in Capability}
         self._pending_changes: List[CapabilityChange] = []
         self._posture = Posture.NOMINAL
         self._consecutive_healthy = 0
         self._event_log = event_log
+        self._event_bus = event_bus
 
     @property
     def posture(self) -> Posture:
@@ -116,6 +121,19 @@ class CapabilityRegistry:
         logger.info(
             "Capability %s: L%d → L%d (%s)", capability.value, old, level, reason
         )
+        if self._event_bus:
+            self._event_bus.emit(
+                "capability.changed",
+                {
+                    "capability": capability.value,
+                    "old_level": old,
+                    "new_level": level,
+                    "reason": reason,
+                    "user_summary": user_summary,
+                    "recovery_hint": recovery_hint,
+                },
+                source="capability_registry",
+            )
 
     def diff(self) -> List[CapabilityChange]:
         changes = list(self._pending_changes)
@@ -349,6 +367,7 @@ class CapabilityRegistry:
 
     def _update_posture(self) -> None:
         """Recalculate posture after a level change."""
+        old_posture = self._posture
         any_below_baseline = any(
             self._state[c] < self._previous.get(c, 1) for c in Capability
         )
@@ -359,3 +378,9 @@ class CapabilityRegistry:
             # Was degraded, no longer below baseline → recovering
             self._posture = Posture.RECOVERING
             self._consecutive_healthy = 0
+        if self._posture != old_posture and self._event_bus:
+            self._event_bus.emit(
+                "posture.changed",
+                {"posture": self._posture.value, "previous": old_posture.value},
+                source="capability_registry",
+            )
