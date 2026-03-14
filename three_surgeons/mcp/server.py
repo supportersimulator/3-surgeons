@@ -28,6 +28,24 @@ from three_surgeons.core.state import MemoryBackend
 
 logger = logging.getLogger(__name__)
 
+# ── Shared capability registry (survives across MCP calls) ────────────
+
+_registry: "CapabilityRegistry | None" = None
+
+
+def _get_registry() -> "CapabilityRegistry":
+    """Return the shared CapabilityRegistry, lazily initialised."""
+    global _registry
+    if _registry is None:
+        from pathlib import Path
+
+        from three_surgeons.core.capability_registry import CapabilityRegistry
+
+        _registry = CapabilityRegistry()
+        state_path = Path.home() / ".3surgeons" / ".capability_state.json"
+        _registry.load(state_path)
+    return _registry
+
 
 def _make_neuro(config: Config) -> LLMProvider:
     """Create neurologist LLMProvider with GPU lock for local providers."""
@@ -446,16 +464,29 @@ def _upgrade_log_path() -> "Path":
 
 def _upgrade_probe_impl() -> dict:
     """Probe ecosystem and report detected phase + available infrastructure."""
+    from pathlib import Path
+
     from three_surgeons.core.upgrade import EcosystemProbe
 
     probe = EcosystemProbe()
     result = probe.run()
     config = _build_config()
+
+    # Apply probe to shared registry and persist
+    registry = _get_registry()
+    registry.apply_probe(result)
+    state_path = Path.home() / ".3surgeons" / ".capability_state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    registry.save(state_path)
+
+    snap = registry.snapshot()
     return {
         "current_phase": config.phase,
         "detected_phase": result.detected_phase,
         "capabilities": [c.value for c in result.capabilities],
         "details": result.details,
+        "capability_levels": snap["capabilities"],
+        "posture": snap["posture"],
     }
 
 
@@ -492,14 +523,7 @@ def _capability_status(
     """
     from pathlib import Path
 
-    from three_surgeons.core.capability_registry import CapabilityRegistry
-
-    reg = CapabilityRegistry()
-
-    # Load persisted state
-    state_path = Path.home() / ".3surgeons" / ".capability_state.json"
-    if state_path.is_file():
-        reg.load(state_path)
+    reg = _get_registry()
 
     # Run fresh probe and apply
     try:
@@ -512,6 +536,7 @@ def _capability_status(
         logger.warning("Probe failed during capability_status: %s", exc)
 
     # Save updated state
+    state_path = Path.home() / ".3surgeons" / ".capability_state.json"
     state_path.parent.mkdir(parents=True, exist_ok=True)
     reg.save(state_path)
 
