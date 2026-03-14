@@ -63,12 +63,18 @@ class CapabilityRegistry:
     and cleared on read (diff-then-clear pattern).
     """
 
+    RECOVERY_PROBES_REQUIRED = 3
+
     def __init__(self) -> None:
         self._state: Dict[Capability, int] = {cap: 1 for cap in Capability}
         self._previous: Dict[Capability, int] = {cap: 1 for cap in Capability}
         self._pending_changes: List[CapabilityChange] = []
         self._posture = Posture.NOMINAL
         self._consecutive_healthy = 0
+
+    @property
+    def posture(self) -> Posture:
+        return self._posture
 
     def get_level(self, capability: Capability) -> int:
         return self._state[capability]
@@ -125,14 +131,32 @@ class CapabilityRegistry:
             "posture": self._posture.value,
         }
 
+    def accept_current_as_baseline(self) -> None:
+        """Snapshot current state as the baseline for degradation detection."""
+        self._previous = dict(self._state)
+
+    def mark_healthy_probe(self) -> None:
+        """Record a probe where no degradation was found.
+        After RECOVERY_PROBES_REQUIRED consecutive healthy probes while
+        RECOVERING, transitions to NOMINAL.
+        """
+        if self._posture == Posture.RECOVERING:
+            self._consecutive_healthy += 1
+            if self._consecutive_healthy >= self.RECOVERY_PROBES_REQUIRED:
+                self._posture = Posture.NOMINAL
+                self._consecutive_healthy = 0
+                logger.info("Posture: RECOVERING → NOMINAL after %d healthy probes",
+                            self.RECOVERY_PROBES_REQUIRED)
+
     def _update_posture(self) -> None:
-        all_l1 = all(v == 1 for v in self._state.values())
-        any_degraded = any(
+        """Recalculate posture after a level change."""
+        any_below_baseline = any(
             self._state[c] < self._previous.get(c, 1) for c in Capability
         )
-        if all_l1 and any_degraded:
-            self._posture = Posture.SAFE_MODE
-        elif any_degraded:
+        if any_below_baseline:
             self._posture = Posture.DEGRADED
-        else:
-            self._posture = Posture.NOMINAL
+            self._consecutive_healthy = 0
+        elif self._posture == Posture.DEGRADED:
+            # Was degraded, no longer below baseline → recovering
+            self._posture = Posture.RECOVERING
+            self._consecutive_healthy = 0

@@ -120,3 +120,50 @@ class TestCapabilityRegistryState:
         assert snap["capabilities"]["evidence_store"]["level"] == 2
         assert snap["capabilities"]["llm_backend"]["level"] == 1
         assert "posture" in snap
+
+
+class TestPostureStateMachine:
+    def test_starts_nominal(self):
+        reg = CapabilityRegistry()
+        assert reg.posture == Posture.NOMINAL
+
+    def test_downgrade_triggers_degraded(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="setup")
+        reg.accept_current_as_baseline()
+        reg.set_level(Capability.EVIDENCE_STORE, 1, reason="Redis died")
+        assert reg.posture == Posture.DEGRADED
+
+    def test_recovery_after_3_healthy_probes(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.STATE_BACKEND, 2, reason="setup")
+        reg.accept_current_as_baseline()
+        reg.set_level(Capability.STATE_BACKEND, 1, reason="Redis died")
+        assert reg.posture == Posture.DEGRADED
+        # Restore level
+        reg.set_level(Capability.STATE_BACKEND, 2, reason="Redis back")
+        assert reg.posture == Posture.RECOVERING
+        # 3 consecutive healthy probes
+        reg.mark_healthy_probe()
+        assert reg.posture == Posture.RECOVERING
+        reg.mark_healthy_probe()
+        assert reg.posture == Posture.RECOVERING
+        reg.mark_healthy_probe()
+        assert reg.posture == Posture.NOMINAL
+
+    def test_degraded_during_recovery_resets_counter(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVENT_BUS, 3, reason="setup")
+        reg.accept_current_as_baseline()
+        reg.set_level(Capability.EVENT_BUS, 1, reason="WS died")
+        reg.set_level(Capability.EVENT_BUS, 3, reason="WS back")
+        assert reg.posture == Posture.RECOVERING
+        reg.mark_healthy_probe()
+        reg.mark_healthy_probe()
+        # Another degradation during recovery
+        reg.set_level(Capability.EVENT_BUS, 1, reason="WS died again")
+        assert reg.posture == Posture.DEGRADED
+        # Counter should have reset — need 3 fresh probes
+        reg.set_level(Capability.EVENT_BUS, 3, reason="WS back again")
+        reg.mark_healthy_probe()
+        assert reg.posture == Posture.RECOVERING
