@@ -8,6 +8,7 @@ Design: docs/plans/2026-03-13-capability-registry-design.md
 from __future__ import annotations
 
 import enum
+import json
 import logging
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -147,6 +148,42 @@ class CapabilityRegistry:
                 self._consecutive_healthy = 0
                 logger.info("Posture: RECOVERING → NOMINAL after %d healthy probes",
                             self.RECOVERY_PROBES_REQUIRED)
+
+    def save(self, path: "Path") -> None:
+        """Persist current state to JSON file."""
+        from pathlib import Path as _Path
+
+        data = {
+            "capabilities": {cap.value: self._state[cap] for cap in Capability},
+            "posture": self._posture.value,
+        }
+        p = _Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2))
+
+    def load(self, path: "Path") -> None:
+        """Load state from JSON file. Emits diffs for any changes from current."""
+        from pathlib import Path as _Path
+
+        p = _Path(path)
+        if not p.is_file():
+            return
+        try:
+            data = json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            logger.warning("Failed to load capability state from %s", path)
+            return
+        caps = data.get("capabilities", {})
+        for cap in Capability:
+            level = caps.get(cap.value)
+            if level is not None and isinstance(level, int):
+                self.set_level(cap, level, reason="restored from saved state")
+        posture_str = data.get("posture")
+        if posture_str:
+            try:
+                self._posture = Posture(posture_str)
+            except ValueError:
+                pass
 
     def _update_posture(self) -> None:
         """Recalculate posture after a level change."""

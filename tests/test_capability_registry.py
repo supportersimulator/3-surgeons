@@ -1,4 +1,6 @@
 """Tests for CapabilityRegistry — per-capability level tracking."""
+import json
+
 import pytest
 from three_surgeons.core.capability_registry import (
     Capability,
@@ -167,3 +169,53 @@ class TestPostureStateMachine:
         reg.set_level(Capability.EVENT_BUS, 3, reason="WS back again")
         reg.mark_healthy_probe()
         assert reg.posture == Posture.RECOVERING
+
+
+class TestPersistence:
+    def test_save_creates_file(self, tmp_path):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="Redis up")
+        path = tmp_path / ".capability_state.json"
+        reg.save(path)
+        assert path.is_file()
+
+    def test_save_load_roundtrip(self, tmp_path):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.LLM_BACKEND, 3, reason="Hybrid routing")
+        reg.set_level(Capability.EVENT_BUS, 3, reason="WebSocket connected")
+        path = tmp_path / ".capability_state.json"
+        reg.save(path)
+
+        reg2 = CapabilityRegistry()
+        reg2.load(path)
+        assert reg2.get_level(Capability.LLM_BACKEND) == 3
+        assert reg2.get_level(Capability.EVENT_BUS) == 3
+        assert reg2.get_level(Capability.EVIDENCE_STORE) == 1  # unchanged
+
+    def test_load_missing_file_stays_l1(self, tmp_path):
+        reg = CapabilityRegistry()
+        reg.load(tmp_path / "nonexistent.json")
+        for cap in Capability:
+            assert reg.get_level(cap) == 1
+
+    def test_load_corrupt_file_stays_l1(self, tmp_path):
+        path = tmp_path / ".capability_state.json"
+        path.write_text("not valid json{{{")
+        reg = CapabilityRegistry()
+        reg.load(path)
+        for cap in Capability:
+            assert reg.get_level(cap) == 1
+
+    def test_load_emits_diffs_from_default(self, tmp_path):
+        """Loading state that differs from L1 default should emit changes."""
+        path = tmp_path / ".capability_state.json"
+        path.write_text(json.dumps({
+            "capabilities": {"evidence_store": 2, "llm_backend": 3},
+            "posture": "nominal",
+        }))
+        reg = CapabilityRegistry()
+        reg.load(path)
+        changes = reg.diff()
+        assert len(changes) == 2
+        caps_changed = {c.capability for c in changes}
+        assert caps_changed == {"evidence_store", "llm_backend"}
