@@ -667,17 +667,37 @@ class SurgeryTeam:
     def _parse_consensus_json(content: str) -> dict:
         """Parse a surgeon's consensus JSON response.
 
+        Handles models that wrap JSON in thinking text or markdown fences
+        by extracting the first {...} block.
+
         Returns defaults on failure: confidence=0.0, assessment="unavailable".
         """
+        text = content.strip()
+        # Try direct parse first
         try:
-            data = json.loads(content)
+            data = json.loads(text)
             return {
                 "confidence": float(data.get("confidence", 0.0)),
                 "assessment": str(data.get("assessment", "unavailable")),
             }
         except (json.JSONDecodeError, TypeError, ValueError):
-            logger.warning("Failed to parse consensus JSON: %s", content[:100])
-            return {"confidence": 0.0, "assessment": "unavailable"}
+            pass
+
+        # Extract first JSON object from mixed content
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(text[start : end + 1])
+                return {
+                    "confidence": float(data.get("confidence", 0.0)),
+                    "assessment": str(data.get("assessment", "unavailable")),
+                }
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+        logger.warning("Failed to parse consensus JSON: %s", content[:100])
+        return {"confidence": 0.0, "assessment": "unavailable"}
 
     @staticmethod
     def _calculate_weighted_score(result: ConsensusResult) -> float:
