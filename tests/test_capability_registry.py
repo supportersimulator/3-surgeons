@@ -65,3 +65,58 @@ class TestDataStructures:
             recovery_hint="Run: docker compose up -d",
         )
         assert change.is_upgrade is False
+
+
+from three_surgeons.core.capability_registry import CapabilityRegistry
+
+
+class TestCapabilityRegistryState:
+    def test_initial_state_all_l1(self):
+        reg = CapabilityRegistry()
+        for cap in Capability:
+            assert reg.get_level(cap) == 1
+
+    def test_set_level(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="Redis available")
+        assert reg.get_level(Capability.EVIDENCE_STORE) == 2
+
+    def test_set_level_clamps_1_to_3(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 5, reason="test")
+        assert reg.get_level(Capability.EVIDENCE_STORE) == 3
+        reg.set_level(Capability.EVIDENCE_STORE, 0, reason="test")
+        assert reg.get_level(Capability.EVIDENCE_STORE) == 1
+
+    def test_diff_empty_when_no_changes(self):
+        reg = CapabilityRegistry()
+        assert reg.diff() == []
+
+    def test_diff_captures_change(self):
+        reg = CapabilityRegistry()
+        reg.set_level(
+            Capability.LLM_BACKEND,
+            2,
+            reason="Local LLM detected",
+            user_summary="Local LLM now handles classification and extraction",
+            recovery_hint="",
+        )
+        changes = reg.diff()
+        assert len(changes) == 1
+        assert changes[0].capability == "llm_backend"
+        assert changes[0].old_level == 1
+        assert changes[0].new_level == 2
+
+    def test_diff_clears_after_read(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVENT_BUS, 3, reason="WebSocket connected")
+        _ = reg.diff()
+        assert reg.diff() == []
+
+    def test_snapshot_returns_all_levels(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="test")
+        snap = reg.snapshot()
+        assert snap["capabilities"]["evidence_store"]["level"] == 2
+        assert snap["capabilities"]["llm_backend"]["level"] == 1
+        assert "posture" in snap
