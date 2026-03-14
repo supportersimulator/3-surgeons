@@ -28,12 +28,20 @@ class Capability(enum.Enum):
 
 
 class Posture(enum.Enum):
-    """Overall system health posture (Phase 9 C6)."""
+    """Overall system health posture (Phase 9 C6).
+
+    State machine:
+        NOMINAL → DEGRADED (any capability drops below baseline)
+        DEGRADED → RECOVERING (all capabilities restored to baseline)
+        RECOVERING → NOMINAL (3 consecutive healthy probes)
+        RECOVERING → DEGRADED (capability drops again during recovery)
+        * → SAFE_MODE (explicit enter_safe_mode() — forces all caps to L1)
+        SAFE_MODE → RECOVERING (explicit exit_safe_mode() — restores pre-safe levels)
+    """
 
     NOMINAL = "nominal"
     DEGRADED = "degraded"
     RECOVERING = "recovering"
-    RESTORED = "restored"
     SAFE_MODE = "safe_mode"
 
 
@@ -177,6 +185,57 @@ class CapabilityRegistry:
                 self._consecutive_healthy = 0
                 logger.info("Posture: RECOVERING → NOMINAL after %d healthy probes",
                             self.RECOVERY_PROBES_REQUIRED)
+
+    def enter_safe_mode(self, reason: str = "manual safe mode") -> None:
+        """Force all capabilities to L1 (emergency brake).
+
+        Saves current levels so exit_safe_mode() can restore them.
+        Transitions posture to SAFE_MODE regardless of current state.
+        """
+        self._safe_mode_saved = dict(self._state)
+        self._batch_posture = True
+        for cap in Capability:
+            self.set_level(cap, 1, reason=reason,
+                           user_summary="Safe mode — all capabilities reduced to L1",
+                           recovery_hint="Exit safe mode to restore previous levels")
+        self._batch_posture = False
+        old_posture = self._posture
+        self._posture = Posture.SAFE_MODE
+        self._consecutive_healthy = 0
+        logger.warning("Posture: %s → SAFE_MODE (%s)", old_posture.value, reason)
+        if self._event_bus:
+            self._event_bus.emit(
+                "posture.changed",
+                {"posture": "safe_mode", "previous": old_posture.value,
+                 "reason": reason},
+                source="capability_registry",
+            )
+
+    def exit_safe_mode(self, reason: str = "safe mode cleared") -> None:
+        """Restore capabilities saved before safe mode.
+
+        Transitions posture to RECOVERING (requires healthy probes to reach NOMINAL).
+        """
+        if self._posture != Posture.SAFE_MODE:
+            logger.warning("exit_safe_mode called but posture is %s", self._posture.value)
+            return
+        saved = getattr(self, "_safe_mode_saved", None)
+        if saved:
+            self._batch_posture = True
+            for cap in Capability:
+                self.set_level(cap, saved[cap], reason=reason)
+            self._batch_posture = False
+        old_posture = self._posture
+        self._posture = Posture.RECOVERING
+        self._consecutive_healthy = 0
+        logger.info("Posture: SAFE_MODE → RECOVERING (%s)", reason)
+        if self._event_bus:
+            self._event_bus.emit(
+                "posture.changed",
+                {"posture": "recovering", "previous": old_posture.value,
+                 "reason": reason},
+                source="capability_registry",
+            )
 
     def save(self, path: "Path") -> None:
         """Persist current state to JSON file."""
@@ -374,6 +433,8 @@ class CapabilityRegistry:
 
     def _update_posture(self) -> None:
         """Recalculate posture after a level change."""
+        if self._posture == Posture.SAFE_MODE:
+            return  # Safe mode exits only via explicit exit_safe_mode()
         old_posture = self._posture
         any_below_baseline = any(
             self._state[c] < self._previous.get(c, 1) for c in Capability

@@ -30,8 +30,8 @@ class TestDataStructures:
         assert Posture.NOMINAL.value == "nominal"
         assert Posture.DEGRADED.value == "degraded"
         assert Posture.RECOVERING.value == "recovering"
-        assert Posture.RESTORED.value == "restored"
         assert Posture.SAFE_MODE.value == "safe_mode"
+        assert len(Posture) == 4
 
     def test_capability_change_fields(self):
         change = CapabilityChange(
@@ -169,6 +169,69 @@ class TestPostureStateMachine:
         reg.set_level(Capability.EVENT_BUS, 3, reason="WS back again")
         reg.mark_healthy_probe()
         assert reg.posture == Posture.RECOVERING
+
+
+class TestSafeMode:
+    def test_enter_safe_mode_forces_all_l1(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 3, reason="setup")
+        reg.set_level(Capability.LLM_BACKEND, 2, reason="setup")
+        reg.enter_safe_mode(reason="emergency")
+        for cap in Capability:
+            assert reg.get_level(cap) == 1
+        assert reg.posture == Posture.SAFE_MODE
+
+    def test_exit_safe_mode_restores_levels(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 3, reason="setup")
+        reg.set_level(Capability.LLM_BACKEND, 2, reason="setup")
+        reg.diff()  # clear pending
+        reg.enter_safe_mode(reason="emergency")
+        reg.diff()  # clear pending
+        reg.exit_safe_mode(reason="all clear")
+        assert reg.get_level(Capability.EVIDENCE_STORE) == 3
+        assert reg.get_level(Capability.LLM_BACKEND) == 2
+        assert reg.posture == Posture.RECOVERING
+
+    def test_exit_safe_mode_requires_healthy_probes_to_nominal(self):
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="setup")
+        reg.enter_safe_mode()
+        reg.exit_safe_mode()
+        assert reg.posture == Posture.RECOVERING
+        reg.mark_healthy_probe()
+        reg.mark_healthy_probe()
+        assert reg.posture == Posture.RECOVERING
+        reg.mark_healthy_probe()
+        assert reg.posture == Posture.NOMINAL
+
+    def test_safe_mode_blocks_posture_update(self):
+        """_update_posture should not override SAFE_MODE."""
+        reg = CapabilityRegistry()
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="setup")
+        reg.accept_current_as_baseline()
+        reg.enter_safe_mode()
+        assert reg.posture == Posture.SAFE_MODE
+        # set_level during safe mode should not change posture
+        reg.set_level(Capability.EVIDENCE_STORE, 2, reason="attempt upgrade")
+        assert reg.posture == Posture.SAFE_MODE
+
+    def test_exit_noop_when_not_in_safe_mode(self):
+        reg = CapabilityRegistry()
+        reg.exit_safe_mode()  # should not crash
+        assert reg.posture == Posture.NOMINAL
+
+    def test_safe_mode_emits_event(self):
+        from three_surgeons.ide.event_bus import EventBus
+        bus = EventBus.get_instance()
+        received = []
+        bus.on("posture.*", lambda e: received.append(e))
+        reg = CapabilityRegistry(event_bus=bus)
+        reg.enter_safe_mode(reason="test")
+        posture_events = [e for e in received if e.type == "posture.changed"]
+        assert len(posture_events) == 1
+        assert posture_events[0].payload["posture"] == "safe_mode"
+        EventBus.reset_instance()
 
 
 class TestPersistence:
