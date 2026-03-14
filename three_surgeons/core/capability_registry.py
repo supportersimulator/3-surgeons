@@ -66,12 +66,13 @@ class CapabilityRegistry:
 
     RECOVERY_PROBES_REQUIRED = 3
 
-    def __init__(self) -> None:
+    def __init__(self, event_log: Optional["UpgradeEventLog"] = None) -> None:
         self._state: Dict[Capability, int] = {cap: 1 for cap in Capability}
         self._previous: Dict[Capability, int] = {cap: 1 for cap in Capability}
         self._pending_changes: List[CapabilityChange] = []
         self._posture = Posture.NOMINAL
         self._consecutive_healthy = 0
+        self._event_log = event_log
 
     @property
     def posture(self) -> Posture:
@@ -103,6 +104,14 @@ class CapabilityRegistry:
                 recovery_hint=recovery_hint,
             )
         )
+        if self._event_log:
+            event = "capability_upgrade" if level > old else "capability_downgrade"
+            self._event_log.record(
+                event,
+                from_phase=old,
+                to_phase=level,
+                details=f"{capability.value}: {reason}",
+            )
         self._update_posture()
         logger.info(
             "Capability %s: L%d → L%d (%s)", capability.value, old, level, reason

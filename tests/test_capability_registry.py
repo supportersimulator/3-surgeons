@@ -317,3 +317,35 @@ class TestProbeIntegration:
         assert reg.get_level(Capability.EVIDENCE_STORE) == 1
         assert reg.get_level(Capability.LLM_BACKEND) == 2
         assert reg.posture == Posture.DEGRADED
+
+
+class TestUpgradeEngineIntegration:
+    def test_apply_probe_records_to_event_log(self, tmp_path):
+        from three_surgeons.core.upgrade import UpgradeEventLog, ProbeResult, InfraCapability
+
+        log_path = tmp_path / "upgrade.log"
+        log = UpgradeEventLog(log_path)
+        reg = CapabilityRegistry(event_log=log)
+        probe_result = ProbeResult(
+            detected_phase=2,
+            capabilities=[InfraCapability.REDIS],
+        )
+        reg.apply_probe(probe_result)
+        entries = log.read_all()
+        assert len(entries) > 0
+        assert any(e["event"] == "capability_upgrade" for e in entries)
+
+    def test_downgrade_records_to_event_log(self, tmp_path):
+        from three_surgeons.core.upgrade import UpgradeEventLog, ProbeResult, InfraCapability
+
+        log_path = tmp_path / "upgrade.log"
+        log = UpgradeEventLog(log_path)
+        reg = CapabilityRegistry(event_log=log)
+        reg.apply_probe(ProbeResult(
+            detected_phase=2,
+            capabilities=[InfraCapability.REDIS],
+        ))
+        reg.accept_current_as_baseline()
+        reg.apply_probe(ProbeResult(detected_phase=1, capabilities=[]))
+        entries = log.read_all()
+        assert any(e["event"] == "capability_downgrade" for e in entries)
