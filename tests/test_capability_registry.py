@@ -396,3 +396,33 @@ class TestEventBusIntegration:
         posture_events = [e for e in received if e.type == "posture.changed"]
         assert len(posture_events) >= 1
         assert posture_events[-1].payload["posture"] == "degraded"
+
+    def test_apply_probe_emits_single_posture_event(self):
+        """3-surgeon finding: apply_probe should batch posture updates."""
+        from unittest.mock import patch
+        from three_surgeons.core.upgrade import ProbeResult, InfraCapability
+
+        bus = EventBus.get_instance()
+        posture_events = []
+        bus.on("posture.*", lambda e: posture_events.append(e))
+
+        reg = CapabilityRegistry(event_bus=bus)
+        # Set baseline at L2 for Redis-dependent caps
+        reg.apply_probe(ProbeResult(detected_phase=2, capabilities=[InfraCapability.REDIS]))
+        reg.accept_current_as_baseline()
+        posture_events.clear()
+
+        # Track how many times _update_posture is called during apply_probe
+        update_calls = []
+        original = reg._update_posture
+        def counting_update():
+            update_calls.append(1)
+            original()
+        with patch.object(reg, "_update_posture", counting_update):
+            # Redis bounce — downgrades 3 capabilities at once
+            reg.apply_probe(ProbeResult(detected_phase=1, capabilities=[]))
+
+        # Should call _update_posture exactly once (batched), not per-capability
+        assert len(update_calls) == 1, f"Expected 1 posture update, got {len(update_calls)}"
+        # Should emit at most 1 posture.changed event
+        assert len(posture_events) <= 1

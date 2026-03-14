@@ -78,6 +78,7 @@ class CapabilityRegistry:
         self._consecutive_healthy = 0
         self._event_log = event_log
         self._event_bus = event_bus
+        self._batch_posture = False
 
     @property
     def posture(self) -> Posture:
@@ -117,7 +118,8 @@ class CapabilityRegistry:
                 to_phase=level,
                 details=f"{capability.value}: {reason}",
             )
-        self._update_posture()
+        if not self._batch_posture:
+            self._update_posture()
         logger.info(
             "Capability %s: L%d → L%d (%s)", capability.value, old, level, reason
         )
@@ -231,6 +233,8 @@ class CapabilityRegistry:
         has_cdna = InfraCapability.CONTEXTDNA in caps
         has_bus = InfraCapability.IDE_EVENT_BUS in caps
         full_stack = has_llm and has_redis and has_cdna and has_bus
+
+        self._batch_posture = True
 
         # Evidence Store
         if full_stack:
@@ -362,6 +366,9 @@ class CapabilityRegistry:
                            reason="No event bus",
                            user_summary="No real-time events — poll-based updates only",
                            recovery_hint="Start event bus: 3s serve --event-bus")
+
+        self._batch_posture = False
+        self._update_posture()
 
         return self.diff()
 
