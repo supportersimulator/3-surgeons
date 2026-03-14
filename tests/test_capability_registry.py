@@ -219,3 +219,101 @@ class TestPersistence:
         assert len(changes) == 2
         caps_changed = {c.capability for c in changes}
         assert caps_changed == {"evidence_store", "llm_backend"}
+
+
+from three_surgeons.core.upgrade import ProbeResult, InfraCapability
+
+
+class TestProbeIntegration:
+    def test_probe_all_l1_when_nothing_detected(self):
+        reg = CapabilityRegistry()
+        probe_result = ProbeResult(detected_phase=1, capabilities=[])
+        reg.apply_probe(probe_result)
+        for cap in Capability:
+            assert reg.get_level(cap) == 1
+
+    def test_redis_detected_upgrades_3_capabilities(self):
+        reg = CapabilityRegistry()
+        probe_result = ProbeResult(
+            detected_phase=2,
+            capabilities=[InfraCapability.REDIS],
+        )
+        reg.apply_probe(probe_result)
+        assert reg.get_level(Capability.EVIDENCE_STORE) == 2
+        assert reg.get_level(Capability.STATE_BACKEND) == 2
+        assert reg.get_level(Capability.HEALTH_MONITORING) == 2
+        assert reg.get_level(Capability.EVENT_BUS) == 1
+        assert reg.get_level(Capability.SKILL_SUGGESTIONS) == 1
+
+    def test_local_llm_upgrades_llm_backend_and_cross_exam(self):
+        reg = CapabilityRegistry()
+        probe_result = ProbeResult(
+            detected_phase=1,
+            capabilities=[InfraCapability.LOCAL_LLM],
+        )
+        reg.apply_probe(probe_result)
+        assert reg.get_level(Capability.LLM_BACKEND) == 2
+        assert reg.get_level(Capability.CROSS_EXAM) == 2
+
+    def test_ide_event_bus_upgrades_to_l3(self):
+        reg = CapabilityRegistry()
+        probe_result = ProbeResult(
+            detected_phase=3,
+            capabilities=[
+                InfraCapability.LOCAL_LLM,
+                InfraCapability.REDIS,
+                InfraCapability.CONTEXTDNA,
+                InfraCapability.IDE_EVENT_BUS,
+            ],
+        )
+        reg.apply_probe(probe_result)
+        assert reg.get_level(Capability.EVENT_BUS) == 3
+        assert reg.get_level(Capability.SKILL_SUGGESTIONS) == 3
+        assert reg.get_level(Capability.HEALTH_MONITORING) == 3
+
+    def test_contextdna_upgrades_project_memory(self):
+        reg = CapabilityRegistry()
+        probe_result = ProbeResult(
+            detected_phase=2,
+            capabilities=[InfraCapability.CONTEXTDNA],
+        )
+        reg.apply_probe(probe_result)
+        assert reg.get_level(Capability.PROJECT_MEMORY) == 2
+
+    def test_full_stack_all_l3(self):
+        reg = CapabilityRegistry()
+        probe_result = ProbeResult(
+            detected_phase=3,
+            capabilities=[
+                InfraCapability.LOCAL_LLM,
+                InfraCapability.REDIS,
+                InfraCapability.CONTEXTDNA,
+                InfraCapability.IDE_EVENT_BUS,
+            ],
+        )
+        reg.apply_probe(probe_result)
+        assert reg.get_level(Capability.EVIDENCE_STORE) == 3
+        assert reg.get_level(Capability.CROSS_EXAM) == 3
+        assert reg.get_level(Capability.STATE_BACKEND) == 3
+        assert reg.get_level(Capability.SKILL_SUGGESTIONS) == 3
+        assert reg.get_level(Capability.PROJECT_MEMORY) == 3
+        assert reg.get_level(Capability.HEALTH_MONITORING) == 3
+        assert reg.get_level(Capability.LLM_BACKEND) == 3
+        assert reg.get_level(Capability.EVENT_BUS) == 3
+
+    def test_losing_redis_downgrades_affected_only(self):
+        reg = CapabilityRegistry()
+        full = ProbeResult(
+            detected_phase=2,
+            capabilities=[InfraCapability.REDIS, InfraCapability.LOCAL_LLM],
+        )
+        reg.apply_probe(full)
+        reg.accept_current_as_baseline()
+        degraded = ProbeResult(
+            detected_phase=1,
+            capabilities=[InfraCapability.LOCAL_LLM],
+        )
+        reg.apply_probe(degraded)
+        assert reg.get_level(Capability.EVIDENCE_STORE) == 1
+        assert reg.get_level(Capability.LLM_BACKEND) == 2
+        assert reg.posture == Posture.DEGRADED

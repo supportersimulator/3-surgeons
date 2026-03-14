@@ -185,6 +185,159 @@ class CapabilityRegistry:
             except ValueError:
                 pass
 
+    def apply_probe(self, probe_result: "ProbeResult") -> List[CapabilityChange]:
+        """Map EcosystemProbe results to per-capability levels.
+
+        Probe->Capability mapping:
+        - LOCAL_LLM -> LLM_BACKEND L2, CROSS_EXAM L2
+        - REDIS -> EVIDENCE_STORE L2, STATE_BACKEND L2, HEALTH_MONITORING L2
+        - CONTEXTDNA -> PROJECT_MEMORY L2, EVIDENCE_STORE L2+
+        - IDE_EVENT_BUS -> EVENT_BUS L3, SKILL_SUGGESTIONS L3, HEALTH_MONITORING L3
+
+        Full stack (all 4) -> everything L3.
+        """
+        from three_surgeons.core.upgrade import InfraCapability
+
+        caps = set(probe_result.capabilities)
+        has_llm = InfraCapability.LOCAL_LLM in caps
+        has_redis = InfraCapability.REDIS in caps
+        has_cdna = InfraCapability.CONTEXTDNA in caps
+        has_bus = InfraCapability.IDE_EVENT_BUS in caps
+        full_stack = has_llm and has_redis and has_cdna and has_bus
+
+        # Evidence Store
+        if full_stack:
+            self.set_level(Capability.EVIDENCE_STORE, 3,
+                           reason="PostgreSQL + bidirectional sync",
+                           user_summary="Evidence stored in PostgreSQL with bidirectional sync to SQLite",
+                           recovery_hint="")
+        elif has_redis or has_cdna:
+            self.set_level(Capability.EVIDENCE_STORE, 2,
+                           reason="Redis-backed persistence",
+                           user_summary="Evidence persists across sessions via Redis",
+                           recovery_hint="")
+        else:
+            self.set_level(Capability.EVIDENCE_STORE, 1,
+                           reason="SQLite local store",
+                           user_summary="Evidence stored locally in SQLite",
+                           recovery_hint="Start Redis: docker compose up -d redis")
+
+        # Cross-Exam
+        if full_stack:
+            self.set_level(Capability.CROSS_EXAM, 3,
+                           reason="3-surgeon team available",
+                           user_summary="Full 3-surgeon cross-examination: Atlas + Neurologist + Cardiologist",
+                           recovery_hint="")
+        elif has_llm:
+            self.set_level(Capability.CROSS_EXAM, 2,
+                           reason="Local LLM available",
+                           user_summary="2-surgeon cross-examination: Atlas + Neurologist",
+                           recovery_hint="")
+        else:
+            self.set_level(Capability.CROSS_EXAM, 1,
+                           reason="Atlas only",
+                           user_summary="Single-surgeon analysis (Atlas)",
+                           recovery_hint="Install local LLM for 2-surgeon cross-exam")
+
+        # State Backend
+        if full_stack:
+            self.set_level(Capability.STATE_BACKEND, 3,
+                           reason="Redis + PostgreSQL with Celery",
+                           user_summary="Full shared state: Redis coordination + PostgreSQL warehouse",
+                           recovery_hint="")
+        elif has_redis:
+            self.set_level(Capability.STATE_BACKEND, 2,
+                           reason="Redis shared state",
+                           user_summary="Shared state via Redis — cross-process coordination enabled",
+                           recovery_hint="")
+        else:
+            self.set_level(Capability.STATE_BACKEND, 1,
+                           reason="In-memory with SQLite fallback",
+                           user_summary="Local state only — no cross-process sharing",
+                           recovery_hint="Start Redis: docker compose up -d redis")
+
+        # Skill Suggestions
+        if has_bus:
+            self.set_level(Capability.SKILL_SUGGESTIONS, 3,
+                           reason="IDE event bus + project memory",
+                           user_summary="Real-time skill suggestions via IDE event bus and project memory",
+                           recovery_hint="")
+        elif has_llm:
+            self.set_level(Capability.SKILL_SUGGESTIONS, 2,
+                           reason="Local LLM classification",
+                           user_summary="Context-weighted skill suggestions via local LLM",
+                           recovery_hint="")
+        else:
+            self.set_level(Capability.SKILL_SUGGESTIONS, 1,
+                           reason="Static matching",
+                           user_summary="Skill suggestions based on static manifest matching",
+                           recovery_hint="Install local LLM for smarter suggestions")
+
+        # Project Memory
+        if full_stack:
+            self.set_level(Capability.PROJECT_MEMORY, 3,
+                           reason="Full ContextDNA heavy mode",
+                           user_summary="Full project memory: PostgreSQL warehouse, bidirectional sync, conflict resolution",
+                           recovery_hint="")
+        elif has_cdna or has_redis:
+            self.set_level(Capability.PROJECT_MEMORY, 2,
+                           reason="File-persisted across sessions",
+                           user_summary="Project memory persists across sessions",
+                           recovery_hint="")
+        else:
+            self.set_level(Capability.PROJECT_MEMORY, 1,
+                           reason="Session-scoped",
+                           user_summary="Project memory is session-scoped — lost on restart",
+                           recovery_hint="Enable ContextDNA for persistent project memory")
+
+        # Health Monitoring
+        if has_bus:
+            self.set_level(Capability.HEALTH_MONITORING, 3,
+                           reason="Live WebSocket health stream",
+                           user_summary="Live health monitoring via WebSocket with Cardiologist EKG",
+                           recovery_hint="")
+        elif has_redis:
+            self.set_level(Capability.HEALTH_MONITORING, 2,
+                           reason="Automated sentinel probes",
+                           user_summary="Automated health monitoring with sentinel and scheduled probes",
+                           recovery_hint="")
+        else:
+            self.set_level(Capability.HEALTH_MONITORING, 1,
+                           reason="CLI gains-gate only",
+                           user_summary="Manual health checks via gains-gate CLI",
+                           recovery_hint="Start Redis for automated monitoring")
+
+        # LLM Backend
+        if full_stack:
+            self.set_level(Capability.LLM_BACKEND, 3,
+                           reason="Hybrid routing with priority queue",
+                           user_summary="Hybrid LLM routing: local + external with priority queue and GPU lock",
+                           recovery_hint="")
+        elif has_llm:
+            self.set_level(Capability.LLM_BACKEND, 2,
+                           reason="Local LLM with API fallback",
+                           user_summary="Local LLM handles classification/extraction, API fallback available",
+                           recovery_hint="")
+        else:
+            self.set_level(Capability.LLM_BACKEND, 1,
+                           reason="External API only",
+                           user_summary="LLM via external API (your configured provider)",
+                           recovery_hint="Install local LLM (MLX/Ollama/LM Studio) for faster local processing")
+
+        # Event Bus
+        if has_bus:
+            self.set_level(Capability.EVENT_BUS, 3,
+                           reason="WebSocket bidirectional",
+                           user_summary="Real-time bidirectional events via WebSocket — IDE file/selection events",
+                           recovery_hint="")
+        else:
+            self.set_level(Capability.EVENT_BUS, 1,
+                           reason="No event bus",
+                           user_summary="No real-time events — poll-based updates only",
+                           recovery_hint="Start event bus: 3s serve --event-bus")
+
+        return self.diff()
+
     def _update_posture(self) -> None:
         """Recalculate posture after a level change."""
         any_below_baseline = any(
