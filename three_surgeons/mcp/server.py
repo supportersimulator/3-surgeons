@@ -82,6 +82,7 @@ TOOL_NAMES: list[str] = [
     "research_tool",
     "upgrade_probe",
     "upgrade_history",
+    "capability_status",
 ]
 
 # ── Dependency builders (thin, testable seams) ──────────────────────────
@@ -470,6 +471,60 @@ def _upgrade_history_impl() -> str:
     return json.dumps(entries, indent=2) if entries else "No upgrade history."
 
 
+# ── Capability Registry ─────────────────────────────────────────────
+
+def _capability_status(
+    verbose: bool = False,
+    capability: str | None = None,
+) -> dict:
+    """Query per-capability levels and system posture.
+
+    Returns current level (L1/L2/L3) for each of 8 capabilities,
+    any pending changes with user-facing summaries and recovery hints,
+    and overall system posture (nominal/degraded/recovering/safe_mode).
+
+    Args:
+        verbose: Include probe details and recovery hints for all capabilities.
+        capability: Filter to a single capability name.
+
+    Returns:
+        Dict with capabilities, posture, and any pending changes.
+    """
+    from pathlib import Path
+
+    from three_surgeons.core.capability_registry import CapabilityRegistry
+
+    reg = CapabilityRegistry()
+
+    # Load persisted state
+    state_path = Path.home() / ".3surgeons" / ".capability_state.json"
+    if state_path.is_file():
+        reg.load(state_path)
+
+    # Run fresh probe and apply
+    try:
+        from three_surgeons.core.upgrade import EcosystemProbe
+
+        probe = EcosystemProbe()
+        probe_result = probe.run()
+        reg.apply_probe(probe_result)
+    except Exception as exc:
+        logger.warning("Probe failed during capability_status: %s", exc)
+
+    # Save updated state
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    reg.save(state_path)
+
+    snap = reg.snapshot()
+
+    # Filter to single capability if requested
+    if capability:
+        filtered = {capability: snap["capabilities"].get(capability, {"level": 1, "changed": False})}
+        snap["capabilities"] = filtered
+
+    return snap
+
+
 # ── FastMCP wiring (optional -- gracefully degrades) ────────────────────
 
 _mcp_app = None
@@ -585,6 +640,14 @@ try:
     def upgrade_history() -> str:
         """Show upgrade event log."""
         return _upgrade_history_impl()
+
+    @_mcp_app.tool()
+    def capability_status(
+        verbose: bool = False,
+        capability: str | None = None,
+    ) -> dict:
+        """Query per-capability levels and system posture."""
+        return _capability_status(verbose=verbose, capability=capability)
 
     # ── Phase 3: IDE Event Bus tools ───────────────────────────────────
 

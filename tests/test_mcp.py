@@ -82,6 +82,7 @@ class TestMCPServerImport:
             "research_tool",
             "upgrade_probe",
             "upgrade_history",
+            "capability_status",
         }
         for name in TOOL_NAMES:
             assert name in known, f"Unexpected tool: {name}"
@@ -662,3 +663,31 @@ class TestPluginStructure:
             if "=" in line and not line.startswith("#"):
                 key, value = line.split("=", 1)
                 assert value.strip() == "", f"Non-empty value in .env.example for {key}"
+
+
+class TestCapabilityStatusTool:
+    def test_capability_status_impl_exists(self):
+        from three_surgeons.mcp.server import _capability_status
+        assert callable(_capability_status)
+
+    def test_capability_status_returns_dict(self):
+        from three_surgeons.mcp.server import _capability_status
+        result = _capability_status()
+        assert isinstance(result, dict)
+        assert "capabilities" in result
+        assert "posture" in result
+        assert len(result["capabilities"]) == 8
+
+    def test_capability_status_verbose(self):
+        from three_surgeons.mcp.server import _capability_status
+        result = _capability_status(verbose=True)
+        assert "capabilities" in result
+
+    def test_capability_status_single_capability(self):
+        from three_surgeons.mcp.server import _capability_status
+        result = _capability_status(capability="evidence_store")
+        assert "evidence_store" in result["capabilities"]
+
+    def test_capability_status_in_tool_names(self):
+        from three_surgeons.mcp.server import TOOL_NAMES
+        assert "capability_status" in TOOL_NAMES
