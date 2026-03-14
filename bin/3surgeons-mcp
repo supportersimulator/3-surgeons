@@ -61,8 +61,10 @@ for PY in python3 python; do
             BOOTSTRAP_VENV="${PLUGIN_ROOT}/.venv"
             echo "  Creating venv at ${BOOTSTRAP_VENV} ..." >&2
             if "$PY" -m venv "$BOOTSTRAP_VENV" 2>/dev/null; then
-                echo "  Installing three-surgeons[mcp] ..." >&2
-                if "${BOOTSTRAP_VENV}/bin/pip" install -q -e "${PLUGIN_ROOT}[mcp]" 2>/dev/null; then
+                EXTRAS="mcp"
+                [ -n "${CONTEXTDNA_ADAPTER:-}" ] && EXTRAS="mcp,contextdna"
+                echo "  Installing three-surgeons[${EXTRAS}] ..." >&2
+                if "${BOOTSTRAP_VENV}/bin/pip" install -q -e "${PLUGIN_ROOT}[${EXTRAS}]" 2>/dev/null; then
                     echo "  Bootstrap complete." >&2
                     exec "${BOOTSTRAP_VENV}/bin/python" -m three_surgeons.mcp.server "$@"
                 fi
