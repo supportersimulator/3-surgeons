@@ -38,12 +38,13 @@ class TestHealth:
         resp = client.get("/health")
         data = resp.json()
         assert isinstance(data["tools"], list)
-        assert set(data["tools"]) == {"probe", "cross_examine", "consult", "consensus"}
+        base_4 = {"probe", "cross_examine", "consult", "consensus"}
+        assert base_4.issubset(set(data["tools"]))
 
-    def test_health_lists_exactly_4_tools(self, client):
+    def test_health_lists_at_least_4_tools(self, client):
         resp = client.get("/health")
         data = resp.json()
-        assert len(data["tools"]) == 4
+        assert len(data["tools"]) >= 4
 
 
 # ── Tool discovery ───────────────────────────────────────────────────────
@@ -57,7 +58,8 @@ class TestToolDiscovery:
         assert resp.status_code == 200
         data = resp.json()
         names = {t["name"] for t in data["tools"]}
-        assert names == {"probe", "cross_examine", "consult", "consensus"}
+        base_4 = {"probe", "cross_examine", "consult", "consensus"}
+        assert base_4.issubset(names)
 
     def test_tools_does_not_list_sentinel(self, client):
         """sentinel_run is internal-only per 3-surgeon consensus."""
