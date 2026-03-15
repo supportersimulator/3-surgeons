@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import time as _time
+from contextlib import asynccontextmanager
 from typing import Any, Callable
 
 from pydantic import ValidationError
@@ -323,9 +324,30 @@ async def invoke_tool(request: Request) -> JSONResponse:
 
 
 # ── App assembly ─────────────────────────────────────────────────────────
+
+
+@asynccontextmanager
+async def _lifespan(app: Starlette):
+    """Manage background tasks across server lifetime."""
+    import asyncio
+    from three_surgeons.http.background_poller import _poll_loop
+
+    task = asyncio.create_task(_poll_loop())
+    logger.info("Background ecosystem poller started")
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Background ecosystem poller stopped")
+
+
 def create_app() -> Starlette:
     """Factory for the REST app — used by Task 9 (MCP + REST unified server)."""
-    app = Starlette(routes=[
+    app = Starlette(lifespan=_lifespan, routes=[
         Route("/health", health, methods=["GET"]),
         Route("/tools", tools, methods=["GET"]),
         Route("/tool/{name}", invoke_tool, methods=["POST"]),
