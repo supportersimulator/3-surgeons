@@ -1,6 +1,6 @@
 ---
 name: pre-implementation-review
-description: HARD-GATE — invoke before executing any implementation plan. Blocks coding until the plan survives adversarial review by all 3 surgeons.
+description: HARD-GATE — adversarial review of implementation plans by all 3 surgeons before coding begins
 allowed-tools:
   - Bash
   - Read

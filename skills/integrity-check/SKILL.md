@@ -1,6 +1,6 @@
 ---
 name: integrity-check
-description: Use for structural integrity verification — checks monotonic counters, service health, and evidence store operability to detect tampering or state corruption
+description: Structural integrity verification — monotonic counters, service health, and evidence store operability
 ---
 
 # Integrity Check

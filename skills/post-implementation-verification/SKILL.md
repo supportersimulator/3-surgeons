@@ -1,6 +1,6 @@
 ---
 name: post-implementation-verification
-description: HARD-GATE — invoke before claiming any work is done or complete. Blocks completion claims until verification passes across all dimensions.
+description: HARD-GATE — multi-dimensional verification that implementation meets requirements before completion
 allowed-tools:
   - Bash
   - Read

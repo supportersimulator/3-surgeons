@@ -101,6 +101,20 @@ cd ~/.claude/plugins/3-surgeons
 python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'
 ```
 
+## IDE Compatibility
+
+| IDE | Transport | Status |
+|-----|-----------|--------|
+| Claude Code | MCP (native) | ✅ Full support |
+| Cursor | HTTP bridge | ✅ Full support |
+| VS Code | HTTP bridge | ✅ Full support |
+| Windsurf | HTTP bridge | ✅ Full support |
+| Zed | HTTP bridge | ✅ Full support |
+| OpenCode | HTTP bridge | ✅ Full support |
+| Codex CLI | HTTP bridge | ✅ Full support |
+
+All tools available via `3s serve` HTTP bridge. See `three_surgeons/config/ide-adapters/` for per-IDE configuration.
+
 ## Quick Start
 
 ```bash

@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+import json
+
 import click
 import yaml
 
@@ -26,6 +28,25 @@ def _make_neuro(config: Config) -> LLMProvider:
         adapter = make_gpu_locked_adapter(config.neurologist, lock_dir=lock_dir)
         return LLMProvider(config.neurologist, query_adapter=adapter)
     return LLMProvider(config.neurologist)
+
+
+def _detect_ides() -> list[str]:
+    """Auto-detect installed IDEs by checking marker directories."""
+    import os
+    markers = {
+        "Claude Code": "~/.claude",
+        "Cursor": "~/.cursor",
+        "VS Code": "~/.config/Code",
+        "VS Code (macOS)": "~/Library/Application Support/Code",
+        "Windsurf": "~/.windsurf",
+        "Zed": "~/.config/zed",
+        "OpenCode": "~/.config/opencode",
+    }
+    detected = []
+    for ide, path in markers.items():
+        if os.path.isdir(os.path.expanduser(path)):
+            detected.append(ide)
+    return detected
 
 
 @click.group()
@@ -171,6 +192,13 @@ def init(detect: bool) -> None:
         config_path.write_text(yaml.dump(config_data, default_flow_style=False))
         click.echo(f"\nConfig written to {config_path}")
 
+    # IDE auto-detection
+    detected = _detect_ides()
+    if detected:
+        click.echo(f"\nDetected IDEs: {', '.join(detected)}")
+    else:
+        click.echo("\nNo supported IDEs detected")
+
     click.echo("\nSecurity reminder: NEVER commit API keys. Use environment variables.")
     click.echo("Run '3s probe' to verify all surgeons are connected.")
     click.echo(
@@ -200,9 +228,16 @@ def _patch_neurologist_from_detection(config_path: Path, detected: dict) -> None
 
 
 @cli.command()
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def probe(ctx: click.Context) -> None:
+def probe(ctx: click.Context, dry_run: bool) -> None:
     """Health check all 3 surgeons with diagnostic details."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("probe", {})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     import httpx
 
     config: Config = ctx.obj["config"]
@@ -534,9 +569,16 @@ def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, reve
     help="Review loop depth: single (1 pass), iterative (up to 3), continuous (up to 5).",
 )
 @click.option("--files", "-f", multiple=True, help="File paths to include as context")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str], files: tuple) -> None:
+def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str], files: tuple, dry_run: bool) -> None:
     """Full cross-examination protocol."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("cross_examine", {"topic": topic, "review_mode": review_mode, "files": list(files)})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.cross_exam import ReviewMode, SurgeryTeam
 
     config: Config = ctx.obj["config"]
@@ -707,9 +749,16 @@ def weights_import(ctx: click.Context, input_file: str) -> None:
 @cli.command()
 @click.argument("topic")
 @click.option("--files", "-f", multiple=True, help="File paths to include as context")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def consult(ctx: click.Context, topic: str, files: tuple) -> None:
+def consult(ctx: click.Context, topic: str, files: tuple, dry_run: bool) -> None:
     """Quick consult with both surgeons."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("consult", {"topic": topic, "files": list(files)})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.cross_exam import SurgeryTeam
 
     config: Config = ctx.obj["config"]
@@ -746,9 +795,16 @@ def consult(ctx: click.Context, topic: str, files: tuple) -> None:
 
 @cli.command()
 @click.argument("claim")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def consensus(ctx: click.Context, claim: str) -> None:
+def consensus(ctx: click.Context, claim: str, dry_run: bool) -> None:
     """Confidence-weighted consensus on a claim."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("consensus", {"claim": claim})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.cross_exam import SurgeryTeam
 
     config: Config = ctx.obj["config"]
@@ -776,9 +832,16 @@ def consensus(ctx: click.Context, claim: str) -> None:
 
 @cli.command("sentinel")
 @click.argument("content")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def sentinel_run(ctx: click.Context, content: str) -> None:
+def sentinel_run(ctx: click.Context, content: str, dry_run: bool) -> None:
     """Run complexity vector sentinel."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("sentinel_run", {"content": content})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.sentinel import Sentinel
 
     sentinel = Sentinel()
@@ -804,9 +867,16 @@ def sentinel_run(ctx: click.Context, content: str) -> None:
 
 
 @cli.command("gains-gate")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def gains_gate(ctx: click.Context) -> None:
+def gains_gate(ctx: click.Context, dry_run: bool) -> None:
     """Run gains gate verification."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("gains_gate", {})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.gates import GainsGate
 
     config: Config = ctx.obj["config"]
@@ -865,9 +935,16 @@ def neurologist_pulse_cmd(ctx: click.Context) -> None:
 @click.argument("topic")
 @click.option("--files", "-f", multiple=True, help="File paths to include as context")
 @click.option("--rounds", "-r", default=1, type=int, help="Number of iterative rounds (1-3)")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def neurologist_challenge_cmd(ctx: click.Context, topic: str, files: tuple, rounds: int) -> None:
+def neurologist_challenge_cmd(ctx: click.Context, topic: str, files: tuple, rounds: int, dry_run: bool) -> None:
     """Corrigibility skeptic challenge on a topic."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("neurologist_challenge", {"topic": topic, "files": list(files), "rounds": rounds})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.neurologist import neurologist_challenge
 
     config: Config = ctx.obj["config"]
@@ -933,9 +1010,16 @@ def introspect_cmd(ctx: click.Context) -> None:
 
 @cli.command("ask-local")
 @click.argument("prompt")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def ask_local_cmd(ctx: click.Context, prompt: str) -> None:
+def ask_local_cmd(ctx: click.Context, prompt: str, dry_run: bool) -> None:
     """Direct query to the neurologist (local model)."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("ask_local", {"prompt": prompt})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.direct import ask_local
 
     config: Config = ctx.obj["config"]
@@ -954,9 +1038,16 @@ def ask_local_cmd(ctx: click.Context, prompt: str) -> None:
 
 @cli.command("ask-remote")
 @click.argument("prompt")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def ask_remote_cmd(ctx: click.Context, prompt: str) -> None:
+def ask_remote_cmd(ctx: click.Context, prompt: str, dry_run: bool) -> None:
     """Direct query to the cardiologist (remote model)."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("ask_remote", {"prompt": prompt})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.direct import ask_remote
 
     config: Config = ctx.obj["config"]
@@ -978,9 +1069,16 @@ def ask_remote_cmd(ctx: click.Context, prompt: str) -> None:
 @click.argument("topic")
 @click.option("--git-context", default=None, help="Recent git changes context")
 @click.option("--files", "-f", multiple=True, help="File paths to include as context")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str, files: tuple) -> None:
+def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str, files: tuple, dry_run: bool) -> None:
     """Cardiologist cross-examination review."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("cardio_review", {"topic": topic, "git_context": git_context, "files": list(files)})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.cardio import cardio_review
     from three_surgeons.core.cross_exam import SurgeryTeam
 
@@ -1044,9 +1142,16 @@ def ab_validate_cmd(ctx: click.Context, description: str) -> None:
 
 @cli.command("research")
 @click.argument("topic")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
-def research_cmd(ctx: click.Context, topic: str) -> None:
+def research_cmd(ctx: click.Context, topic: str, dry_run: bool) -> None:
     """Self-directed research on a topic."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("research", {"topic": topic})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.research import research
 
     config: Config = ctx.obj["config"]
@@ -1072,6 +1177,7 @@ def research_cmd(ctx: click.Context, topic: str) -> None:
 @click.argument("variant_a")
 @click.argument("variant_b")
 @click.argument("hypothesis")
+@click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
 def ab_propose(
     ctx: click.Context,
@@ -1079,8 +1185,15 @@ def ab_propose(
     variant_a: str,
     variant_b: str,
     hypothesis: str,
+    dry_run: bool,
 ) -> None:
     """Propose an A/B test."""
+    if dry_run:
+        from three_surgeons.core.dry_run import check_dry_run
+        result = check_dry_run("ab_propose", {"param": param, "variant_a": variant_a, "variant_b": variant_b, "hypothesis": hypothesis})
+        click.echo(json.dumps(result.to_dict(), indent=2))
+        return
+
     from three_surgeons.core.ab_testing import ABTestEngine
 
     config: Config = ctx.obj["config"]

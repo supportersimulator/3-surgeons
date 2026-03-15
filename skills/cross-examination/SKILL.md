@@ -1,6 +1,6 @@
 ---
 name: cross-examination
-description: Invoke when making major architectural decisions, resolving conflicting evidence, or changing >3 files -- triggers deep 3-phase multi-model analysis
+description: Deep 3-phase multi-model analysis — cross-examine a claim using multiple AI models
 ---
 
 # Cross-Examination

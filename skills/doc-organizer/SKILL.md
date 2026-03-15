@@ -1,6 +1,6 @@
 ---
 name: doc-organizer
-description: Set up the 4-folder document system (inbox/vision/reflect/dao) in a project. Invoke when initializing a new project, onboarding to 3-surgeons, or when the user asks about document organization.
+description: Set up the 4-folder document system (inbox/vision/reflect/dao) in a project
 ---
 
 # Doc Organizer -- 4-Folder Document System

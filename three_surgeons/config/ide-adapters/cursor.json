@@ -1,0 +1,8 @@
+{
+  "ide": "Cursor",
+  "transport": "http",
+  "base_url": "http://127.0.0.1:3541",
+  "config_path": "~/.cursor/mcp.json",
+  "setup": "3s setup-check --ide cursor",
+  "features": ["http_bridge", "tool_discovery"]
+}

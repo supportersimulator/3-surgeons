@@ -1,6 +1,6 @@
 ---
 name: counter-position
-description: HARD-GATE — invoke on architectural decisions, when confidence is high but evidence is low, or when a single surgeon dominates consensus. An opinion is NOT valid until you can argue BOTH sides.
+description: HARD-GATE — force adversarial counter-arguments to ensure both sides of a decision are examined
 allowed-tools:
   - Bash
   - Read

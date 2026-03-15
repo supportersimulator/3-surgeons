@@ -1,6 +1,6 @@
 ---
 name: ab-testing
-description: Invoke when optimizing prompts, comparing approaches, or tuning parameters -- manages the full A/B test lifecycle with safety constraints and human veto windows
+description: Full A/B test lifecycle with safety constraints and human veto windows
 ---
 
 # A/B Testing

@@ -1,6 +1,6 @@
 ---
 name: architectural-gate
-description: HARD-GATE — invoke before ANY architectural decision, new subsystem, >3 file changes, security/schema/API/dependency/infra changes. Blocks implementation until gate passes.
+description: HARD-GATE — multi-model review of architectural decisions before implementation proceeds
 allowed-tools:
   - Bash
   - TodoWrite

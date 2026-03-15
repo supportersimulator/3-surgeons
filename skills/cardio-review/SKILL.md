@@ -1,6 +1,6 @@
 ---
 name: cardio-review
-description: Use for cardiologist cross-examination reviews with optional git context — the external perspective on code changes, architecture decisions, and potential blind spots
+description: External-model cross-examination review with optional git context for code and architecture decisions
 ---
 
 # Cardio Review

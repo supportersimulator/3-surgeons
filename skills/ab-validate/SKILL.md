@@ -1,6 +1,6 @@
 ---
 name: ab-validate
-description: Use for quick 3-surgeon fix validation — gets a rapid verdict from all three surgeons on whether a proposed fix or change is sound
+description: Rapid 3-surgeon verdict on whether a proposed fix or change is sound
 ---
 
 # A/B Validate

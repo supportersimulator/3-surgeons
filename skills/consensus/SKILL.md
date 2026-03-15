@@ -1,6 +1,6 @@
 ---
 name: consensus
-description: Invoke to validate claims, check assumptions, or get a confidence-weighted vote from both surgeons before acting on uncertain information
+description: Confidence-weighted vote from multiple surgeons to validate claims and check assumptions
 ---
 
 # Consensus

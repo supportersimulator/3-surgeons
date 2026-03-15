@@ -1,6 +1,6 @@
 ---
 name: probe
-description: Invoke at session start, before critical operations, or after infrastructure changes to verify all three surgeons are reachable and operational
+description: Verify all three surgeons are reachable and operational
 ---
 
 # Probe

@@ -1,6 +1,6 @@
 ---
 name: setup-team
-description: First-run onboarding — the head surgeon (Claude) guides the user through assembling their surgery team by detecting backends, configuring API keys securely, and verifying connectivity
+description: First-run onboarding — detect backends, configure API keys, and verify surgeon connectivity
 ---
 
 # Setup Team

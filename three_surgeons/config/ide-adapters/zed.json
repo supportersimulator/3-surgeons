@@ -1,0 +1,8 @@
+{
+  "ide": "Zed",
+  "transport": "http",
+  "base_url": "http://127.0.0.1:3541",
+  "config_path": "~/.config/zed/settings.json",
+  "setup": "3s setup-check --ide zed",
+  "features": ["http_bridge", "tool_discovery"]
+}

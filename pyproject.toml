@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "three-surgeons"
 version = "1.0.0"
-description = "Multi-model consensus system for Claude Code"
+description = "Multi-model AI consensus system — works with any IDE"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1",

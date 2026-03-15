@@ -22,7 +22,7 @@ def client():
     return TestClient(create_app())
 
 
-# ── Health endpoint ──────────────────────────────────────────────────────
+# -- Health endpoint ----------------------------------------------------------
 
 
 class TestHealth:
@@ -47,7 +47,7 @@ class TestHealth:
         assert len(data["tools"]) >= 4
 
 
-# ── Tool discovery ───────────────────────────────────────────────────────
+# -- Tool discovery -----------------------------------------------------------
 
 
 class TestToolDiscovery:
@@ -60,13 +60,6 @@ class TestToolDiscovery:
         names = {t["name"] for t in data["tools"]}
         base_4 = {"probe", "cross_examine", "consult", "consensus"}
         assert base_4.issubset(names)
-
-    def test_tools_does_not_list_sentinel(self, client):
-        """sentinel_run is internal-only per 3-surgeon consensus."""
-        resp = client.get("/tools")
-        data = resp.json()
-        names = {t["name"] for t in data["tools"]}
-        assert "sentinel_run" not in names
 
     def test_tools_include_descriptions(self, client):
         resp = client.get("/tools")
@@ -94,7 +87,7 @@ class TestToolDiscovery:
         assert probe["params"] == {}
 
 
-# ── Tool invocation ──────────────────────────────────────────────────────
+# -- Tool invocation ----------------------------------------------------------
 
 
 class TestToolInvocation:
@@ -154,7 +147,7 @@ class TestToolInvocation:
         mock_consensus.assert_called_once_with(claim="X is true")
 
 
-# ── Error handling ───────────────────────────────────────────────────────
+# -- Error handling -----------------------------------------------------------
 
 
 class TestErrorHandling:
@@ -210,13 +203,8 @@ class TestErrorHandling:
         assert resp.status_code == 500
         assert "TimeoutError" in resp.json()["error"]
 
-    def test_sentinel_not_accessible_via_http(self, client):
-        """sentinel_run should not be invocable via the REST API."""
-        resp = client.post("/tool/sentinel_run", json={"content": "test"})
-        assert resp.status_code == 404
 
-
-# ── Rate limiting ────────────────────────────────────────────────────────
+# -- Rate limiting ------------------------------------------------------------
 
 
 class TestRateLimiting:
@@ -247,7 +235,7 @@ class TestRateLimiting:
             pytest.fail("Expected 429 rate limit response within 25 requests")
 
 
-# ── CORS ──────────────────────────────────────────────────────────────────
+# -- CORS ---------------------------------------------------------------------
 
 
 class TestCORS:
@@ -269,7 +257,7 @@ class TestCORS:
         assert "access-control-allow-origin" in resp.headers
 
 
-# ── MCP mount ────────────────────────────────────────────────────────────
+# -- MCP mount ----------------------------------------------------------------
 
 
 class TestMCPMount:
@@ -288,7 +276,7 @@ class TestMCPMount:
         assert app is not None
 
 
-# ── Auth attribution ────────────────────────────────────────────────────
+# -- Auth attribution ---------------------------------------------------------
 
 
 class TestAuthAttribution:
@@ -319,3 +307,30 @@ class TestAuthAttribution:
         entries = trail.recent(limit=1)
         assert entries[0]["user_id"] == "anonymous"
         assert entries[0]["session_id"] == "unknown"
+
+
+# -- Tool registry completeness (Task 2) -------------------------------------
+
+
+class TestToolRegistry:
+    """All 35 tools must be registered."""
+
+    def test_base_tools_count(self):
+        """All 35 tools must be registered (15 existing + 20 new)."""
+        from three_surgeons.http.server import BASE_TOOLS
+        assert len(BASE_TOOLS) >= 35, f"Only {len(BASE_TOOLS)} tools registered, expected 35"
+
+    def test_all_tools_have_fn_name(self):
+        from three_surgeons.http.server import BASE_TOOLS
+        for name, spec in BASE_TOOLS.items():
+            assert "fn_name" in spec, f"Tool {name} missing fn_name"
+            assert "description" in spec, f"Tool {name} missing description"
+
+    def test_fn_names_resolve(self):
+        """Every fn_name must exist in the mcp.server module."""
+        from three_surgeons.http.server import BASE_TOOLS
+        import three_surgeons.mcp.server as mcp
+        for name, spec in BASE_TOOLS.items():
+            fn = getattr(mcp, spec["fn_name"], None)
+            assert fn is not None, f"Tool {name}: fn_name '{spec['fn_name']}' not found in mcp.server"
+            assert callable(fn), f"Tool {name}: {spec['fn_name']} is not callable"

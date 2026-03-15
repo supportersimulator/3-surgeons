@@ -201,6 +201,7 @@ class Config:
     phase: int = 1  # Auto-detected, auto-promoted
     queue: QueueConfig = field(default_factory=QueueConfig)
     upgrade: UpgradeConfig = field(default_factory=UpgradeConfig)
+    read_only: bool = False
 
     @classmethod
     def from_yaml(cls, path: Path) -> Config:

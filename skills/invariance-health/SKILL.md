@@ -1,6 +1,6 @@
 ---
 name: invariance-health
-description: Metacognition — invoke every 10 gate invocations or on-demand to evaluate the gate system's own effectiveness, calibrate thresholds, and fine-tune the invariance aircraft
+description: Metacognition — evaluate gate system effectiveness, calibrate thresholds, and fine-tune invariance
 allowed-tools:
   - Bash
   - Read

@@ -1,0 +1,7 @@
+{
+  "ide": "Claude Code",
+  "transport": "mcp",
+  "config_path": "~/.claude/plugins/3-surgeons/config.json",
+  "setup": "3s setup-check --ide claude-code",
+  "features": ["mcp_native", "tool_discovery", "streaming"]
+}

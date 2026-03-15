@@ -1,6 +1,6 @@
 ---
 name: direct-query
-description: Use when you need a direct answer from a specific surgeon without consensus overhead — ask-local for the neurologist, ask-remote for the cardiologist, or test dissent on disagreements
+description: Direct answer from a specific surgeon without consensus overhead
 ---
 
 # Direct Query

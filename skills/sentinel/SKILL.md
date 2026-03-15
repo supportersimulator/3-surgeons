@@ -1,6 +1,6 @@
 ---
 name: sentinel
-description: Invoke before major changes, after feature completion, or for periodic scans to detect complexity risks across configurable dimensions
+description: Detect complexity risks across configurable dimensions
 ---
 
 # Sentinel

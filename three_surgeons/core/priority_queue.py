@@ -11,6 +11,7 @@ import json as _json
 import os
 import random
 import re
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,6 +65,12 @@ class GPULock:
     lock file. Supports stale lock detection (dead PID) and exponential
     backoff polling.
 
+    Intra-process serialisation: a per-directory threading.Lock ensures
+    that concurrent callers within the same process (e.g. parallel MCP
+    tool calls) queue up rather than all racing on the same file lock
+    (which is per-process on macOS/Linux and would silently succeed for
+    the same PID).
+
     Usage:
         lock = GPULock(lock_dir=Path("/tmp"))
         if lock.acquire(timeout=5.0):
@@ -79,20 +86,41 @@ class GPULock:
 
     LOCK_FILENAME = "gpu.lock"
 
+    # Per-directory threading locks for intra-process serialisation.
+    # Key: resolved lock_dir string → threading.Lock
+    _thread_locks: dict[str, threading.Lock] = {}
+    _thread_locks_guard = threading.Lock()
+
     def __init__(self, lock_dir: Path) -> None:
         self._lock_dir = Path(lock_dir)
         self._lock_path = self._lock_dir / self.LOCK_FILENAME
         self._held = False
         self._caller: Optional[str] = None
+        self._thread_lock = self._get_thread_lock(str(self._lock_dir))
+
+    @classmethod
+    def _get_thread_lock(cls, key: str) -> threading.Lock:
+        with cls._thread_locks_guard:
+            if key not in cls._thread_locks:
+                cls._thread_locks[key] = threading.Lock()
+            return cls._thread_locks[key]
 
     def acquire(self, timeout: float = 5.0) -> bool:
         """Try to acquire the GPU lock within *timeout* seconds.
+
+        First acquires an intra-process threading lock (serialises callers
+        within the same process), then the file-based lock (serialises
+        across processes).
 
         Polls with exponential backoff (100ms initial, 2s cap).
         Steals locks held by dead PIDs.
 
         Returns True if acquired, False if timed out.
         """
+        # Intra-process gate: block until our turn within this process
+        if not self._thread_lock.acquire(timeout=timeout):
+            return False
+
         deadline = time.monotonic() + timeout
         backoff = 0.1
 
@@ -110,17 +138,19 @@ class GPULock:
 
             # Out of time?
             if time.monotonic() >= deadline:
+                self._thread_lock.release()
                 return False
 
             # Sleep with backoff, but don't overshoot the deadline
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                self._thread_lock.release()
                 return False
             time.sleep(min(backoff, remaining))
             backoff = min(backoff * 1.5, 2.0)
 
     def release(self) -> None:
-        """Release the GPU lock by removing the lock file.
+        """Release the GPU lock by removing the lock file and threading lock.
 
         Safe to call even if the lock is not held (no-op).
         """
@@ -131,6 +161,10 @@ class GPULock:
         except OSError:
             pass
         self._held = False
+        try:
+            self._thread_lock.release()
+        except RuntimeError:
+            pass  # already released
 
     def _try_lock(self) -> bool:
         """Attempt to atomically create the lock file with our PID.

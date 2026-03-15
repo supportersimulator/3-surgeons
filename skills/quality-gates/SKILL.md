@@ -1,6 +1,6 @@
 ---
 name: quality-gates
-description: Invoke between major phases (GainsGate), for quality reviews (CardioGate), or before risky actions (CorrigibilityGate) to enforce system health and safety invariants
+description: Enforce system health and safety invariants via GainsGate, CardioGate, and CorrigibilityGate
 ---
 
 # Quality Gates

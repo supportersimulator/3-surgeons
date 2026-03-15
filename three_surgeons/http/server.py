@@ -8,7 +8,7 @@ Starlette runs them in a threadpool via async route handlers. LLM calls may
 block for 10-120s — this is expected and handled by the VS Code adapter's
 AbortSignal.timeout(120_000).
 
-4 base tools exposed (3-surgeon consensus — sentinel/gates are internal):
+35 tools exposed (all 3-surgeon tools — universal HTTP access):
   POST /tool/probe          — health-check all 3 surgeons
   POST /tool/cross_examine  — full cross-examination (may take 30-120s)
   POST /tool/consult        — quick consult (10-30s)
@@ -38,7 +38,7 @@ from three_surgeons.http.schemas import TOOL_SCHEMAS
 
 logger = logging.getLogger(__name__)
 
-# ── Tool registry (4 base tools — sentinel is internal) ─────────────────
+# ── Tool registry (35 tools) ─────────────────────────────────────────────
 
 ToolSpec = dict[str, Any]
 
@@ -103,6 +103,93 @@ BASE_TOOLS: dict[str, ToolSpec] = {
         "fn_name": "_cap_deep_audit",
         "description": "4-phase deep audit pipeline",
     },
+    # Sentinel & gates
+    "sentinel_run": {
+        "fn_name": "_sentinel_run",
+        "description": "Scan for complexity risk vectors",
+    },
+    "gains_gate": {
+        "fn_name": "_gains_gate",
+        "description": "Infrastructure health gate verification",
+    },
+    # A/B testing
+    "ab_propose": {
+        "fn_name": "_ab_propose",
+        "description": "Propose an A/B test experiment",
+    },
+    "ab_start": {
+        "fn_name": "_ab_start",
+        "description": "Start A/B test grace period",
+    },
+    "ab_measure": {
+        "fn_name": "_ab_measure",
+        "description": "Record A/B test measurement",
+    },
+    "ab_conclude": {
+        "fn_name": "_ab_conclude",
+        "description": "Conclude an A/B test with verdict",
+    },
+    "ab_validate_tool": {
+        "fn_name": "_ab_validate_impl",
+        "description": "Quick 3-surgeon fix validation",
+    },
+    # Direct queries
+    "ask_local_tool": {
+        "fn_name": "_ask_local_impl",
+        "description": "Direct query to neurologist",
+    },
+    "ask_remote_tool": {
+        "fn_name": "_ask_remote_impl",
+        "description": "Direct query to cardiologist",
+    },
+    # Neurologist
+    "neurologist_pulse_tool": {
+        "fn_name": "_neurologist_pulse_impl",
+        "description": "Neurologist system health pulse check",
+    },
+    "neurologist_challenge_tool": {
+        "fn_name": "_neurologist_challenge_impl",
+        "description": "Corrigibility skeptic challenge",
+    },
+    "introspect_tool": {
+        "fn_name": "_introspect_impl",
+        "description": "Surgeon capability self-report",
+    },
+    # Review & research
+    "cardio_review_tool": {
+        "fn_name": "_cardio_review_impl",
+        "description": "Cardiologist cross-examination review",
+    },
+    "research_tool": {
+        "fn_name": "_research_impl",
+        "description": "Self-directed research on a topic",
+    },
+    # Upgrade & capability
+    "upgrade_probe": {
+        "fn_name": "_upgrade_probe_impl",
+        "description": "Probe ecosystem and report detected phase",
+    },
+    "upgrade_history": {
+        "fn_name": "_upgrade_history_impl",
+        "description": "Show upgrade event log",
+    },
+    # IDE event bus
+    "event_subscribe": {
+        "fn_name": "event_subscribe",
+        "description": "Subscribe to IDE event bus patterns",
+    },
+    "event_unsubscribe": {
+        "fn_name": "event_unsubscribe",
+        "description": "Unsubscribe from event stream",
+    },
+    "event_publish": {
+        "fn_name": "event_publish",
+        "description": "Publish event to IDE event bus",
+    },
+    "event_poll": {
+        "fn_name": "event_poll",
+        "description": "Poll for events on subscription stream",
+    },
 }
 
 
@@ -118,7 +205,13 @@ async def health(request: Request) -> JSONResponse:
     """GET /health — server health + available tool list."""
     return JSONResponse({
         "status": "ok",
+        "version": "1.0.0",
         "tools": list(BASE_TOOLS.keys()),
+        "tool_count": len(BASE_TOOLS),
+        "supported_ides": [
+            "Claude Code", "Cursor", "VS Code",
+            "OpenCode", "Codex CLI", "Windsurf", "Zed",
+        ],
     })
 
 
@@ -189,6 +282,18 @@ async def invoke_tool(request: Request) -> JSONResponse:
             status_code=429,
         )
 
+    # Dry-run mode (header or global config)
+    dry_run = request.headers.get("X-Dry-Run", "").lower() in ("true", "1", "yes")
+    if dry_run:
+        from three_surgeons.core.dry_run import DryRunResult, COST_ESTIMATES, TOOL_SURGEONS
+        result = DryRunResult(
+            tool=name,
+            would_call=TOOL_SURGEONS.get(name, []),
+            estimated_cost_usd=COST_ESTIMATES.get(name, 0.0),
+            plan=f"Would invoke {name} with args: {kwargs}",
+        )
+        return JSONResponse(result.to_dict())
+
     # Invoke tool
     start = _time.monotonic()
     try:
@@ -233,7 +338,7 @@ def create_app() -> Starlette:
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-User-Id", "X-Session-Id"],
+        allow_headers=["Content-Type", "X-User-Id", "X-Session-Id", "X-Dry-Run"],
     )
 
     # Mount MCP server if SDK available

@@ -1,6 +1,6 @@
 ---
 name: research
-description: Use for self-directed research on a topic via the cardiologist — finds relevant information, synthesizes findings, and tracks research costs
+description: Self-directed research on a topic — finds information, synthesizes findings, and tracks costs
 ---
 
 # Research

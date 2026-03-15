@@ -1,0 +1,7 @@
+{
+  "ide": "Codex CLI",
+  "transport": "http",
+  "base_url": "http://127.0.0.1:3541",
+  "setup": "3s setup-check --ide codex-cli",
+  "features": ["http_bridge"]
+}

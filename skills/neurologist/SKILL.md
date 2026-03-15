@@ -1,6 +1,6 @@
 ---
 name: neurologist
-description: Use for system health pulse checks, corrigibility challenges on proposed actions, and surgeon capability introspection — the local intelligence layer
+description: Local-model health pulse, corrigibility challenges, and surgeon capability introspection
 ---
 
 # Neurologist
