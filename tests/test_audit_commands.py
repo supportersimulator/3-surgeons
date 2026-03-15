@@ -114,24 +114,51 @@ class TestCmdDeepAudit:
 
     def test_deep_audit_success(self):
         from three_surgeons.core.audit_commands import cmd_deep_audit
+
+        phase3_json = json.dumps({
+            "planned_items": [
+                {"name": "Cache layer", "description": "Add Redis cache",
+                 "source_file": "docs/plan.md", "status": "PLANNED",
+                 "category": "infrastructure", "priority": "high",
+                 "implementation_hints": "Use Redis"}
+            ],
+            "total_items": 1,
+            "summary": "One planned feature"
+        })
+        phase4_json = json.dumps({
+            "gap_analysis": [
+                {"name": "Cache layer", "verdict": "NOT_BUILT",
+                 "evidence": "No evidence found", "confidence": 0.8,
+                 "priority": "high", "recommendation": "Implement cache"}
+            ],
+            "ab_test_candidates": [],
+            "summary": {"total_planned": 1, "built": 0, "not_built": 1,
+                        "partially_built": 0, "uncertain": 0,
+                        "narrative": "One gap found"}
+        })
+
         evidence = MagicMock()
         evidence.search.return_value = []
         llm = MagicMock()
-        llm.query.return_value = MagicMock(
-            ok=True, content="Audit findings: no issues", cost_usd=0.05
-        )
+        llm.query.side_effect = [
+            MagicMock(ok=True, content=phase3_json, cost_usd=0.03),
+            MagicMock(ok=True, content=phase4_json, cost_usd=0.02),
+        ]
         ctx = _make_ctx(healthy_llms=1, evidence=evidence, git=True, git_root="/repo")
         ctx.healthy_llms = [llm]
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "three_surgeons.core.audit_commands._get_recent_git_files",
-                lambda *a, **kw: ["src/main.py", "src/config.py"],
+                "three_surgeons.core.audit_commands._read_files",
+                lambda *a, **kw: {"docs/plan.md": "# Plan\n## Cache layer\nAdd Redis cache."},
             )
-            result = cmd_deep_audit(ctx, topic="architecture review")
+            result = cmd_deep_audit(
+                ctx, topic="architecture review",
+                file_paths=["docs/plan.md"],
+            )
 
         assert result.success is True
-        assert "phases" in result.data or "audit" in result.data
+        assert "phases" in result.data
 
     def test_deep_audit_blocked_no_git(self):
         from three_surgeons.core.audit_commands import DEEP_AUDIT_REQS
@@ -142,21 +169,29 @@ class TestCmdDeepAudit:
 
     def test_deep_audit_degraded_one_llm(self):
         from three_surgeons.core.audit_commands import cmd_deep_audit
+
+        phase3_json = json.dumps({
+            "planned_items": [], "total_items": 0, "summary": "Nothing found"
+        })
+
         evidence = MagicMock()
         evidence.search.return_value = []
         llm = MagicMock()
+        # Phase 3 only (Phase 4 skipped when no planned_items and no evidence)
         llm.query.return_value = MagicMock(
-            ok=True, content="Audit: single surgeon mode", cost_usd=0.03
+            ok=True, content=phase3_json, cost_usd=0.03
         )
         ctx = _make_ctx(healthy_llms=1, evidence=evidence, git=True, git_root="/repo")
         ctx.healthy_llms = [llm]
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(
-                "three_surgeons.core.audit_commands._get_recent_git_files",
-                lambda *a, **kw: ["src/main.py"],
+                "three_surgeons.core.audit_commands._read_files",
+                lambda *a, **kw: {"src/main.py": "def main(): pass"},
             )
-            result = cmd_deep_audit(ctx, topic="test")
+            result = cmd_deep_audit(
+                ctx, topic="test", file_paths=["src/main.py"]
+            )
 
         assert result.degraded is True
         assert any("surgeon" in n.lower() for n in result.degradation_notes)

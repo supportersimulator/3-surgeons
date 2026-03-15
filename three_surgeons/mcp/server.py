@@ -643,9 +643,9 @@ def _cap_cardio_reverify(topic: str) -> dict:
     return _run_tool(CARDIO_REVERIFY_REQS, cmd_cardio_reverify, topic=topic)
 
 
-def _cap_deep_audit(topic: str) -> dict:
+def _cap_deep_audit(topic: str, file_paths: list[str] | None = None) -> dict:
     from three_surgeons.core.audit_commands import cmd_deep_audit, DEEP_AUDIT_REQS
-    return _run_tool(DEEP_AUDIT_REQS, cmd_deep_audit, topic=topic)
+    return _run_tool(DEEP_AUDIT_REQS, cmd_deep_audit, topic=topic, file_paths=file_paths)
 
 
 # ── FastMCP wiring (optional -- gracefully degrades) ────────────────────
@@ -855,9 +855,9 @@ try:
         return _cap_cardio_reverify(topic=topic)
 
     @_mcp_app.tool()
-    def cap_deep_audit(topic: str) -> dict:
-        """4-phase deep audit pipeline (capability-adaptive)."""
-        return _cap_deep_audit(topic=topic)
+    def cap_deep_audit(topic: str, file_paths: list[str] | None = None) -> dict:
+        """5-phase chained deep audit pipeline (capability-adaptive)."""
+        return _cap_deep_audit(topic=topic, file_paths=file_paths)
 
 except ImportError:
     # mcp SDK not installed -- tools are still usable as plain functions

@@ -83,6 +83,7 @@ class CapCardioReverifyRequest(BaseModel):
 
 class CapDeepAuditRequest(BaseModel):
     topic: str = Field(..., min_length=1, description="Topic for deep audit")
+    file_paths: Optional[List[str]] = Field(None, description="Explicit file paths to audit (comma-separated or list)")
 
 
 class SentinelRunRequest(BaseModel):

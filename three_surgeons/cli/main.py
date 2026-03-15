@@ -1508,11 +1508,13 @@ def cmd_cardio_reverify_cli(ctx: click.Context, topic: str) -> None:
 
 @cli.command("deep-audit")
 @click.option("--topic", required=True, help="Topic for deep audit")
+@click.option("--files", default=None, help="Comma-separated file paths to audit (skips LLM file selection)")
 @click.pass_context
-def cmd_deep_audit_cli(ctx: click.Context, topic: str) -> None:
-    """4-phase deep audit pipeline."""
+def cmd_deep_audit_cli(ctx: click.Context, topic: str, files: str | None) -> None:
+    """5-phase chained deep audit pipeline."""
     from three_surgeons.core.audit_commands import cmd_deep_audit, DEEP_AUDIT_REQS
-    _run_command(ctx, DEEP_AUDIT_REQS, cmd_deep_audit, topic=topic)
+    file_paths = [f.strip() for f in files.split(",") if f.strip()] if files else None
+    _run_command(ctx, DEEP_AUDIT_REQS, cmd_deep_audit, topic=topic, file_paths=file_paths)
 
 
 # -- main entry point -------------------------------------------------------
