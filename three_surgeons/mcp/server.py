@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 # ── Shared capability registry (survives across MCP calls) ────────────
 
 _registry: "CapabilityRegistry | None" = None
+_neuro_singleton: "LLMProvider | None" = None
+_neuro_config_hash: "str | None" = None
 
 
 def _get_registry() -> "CapabilityRegistry":
@@ -45,6 +47,21 @@ def _get_registry() -> "CapabilityRegistry":
         state_path = Path.home() / ".3surgeons" / ".capability_state.json"
         _registry.load(state_path)
     return _registry
+
+
+def _get_neuro(config: Config) -> LLMProvider:
+    """Return shared neurologist LLMProvider singleton.
+
+    Reuses the same instance across all MCP tool calls so the GPU lock
+    adapter serialises intra-process requests instead of each tool call
+    creating an independent lock holder.
+    """
+    global _neuro_singleton, _neuro_config_hash
+    cfg_hash = f"{config.neurologist.provider}:{config.neurologist.endpoint}:{config.neurologist.model}"
+    if _neuro_singleton is None or _neuro_config_hash != cfg_hash:
+        _neuro_singleton = _make_neuro(config)
+        _neuro_config_hash = cfg_hash
+    return _neuro_singleton
 
 
 def _make_neuro(config: Config) -> LLMProvider:
@@ -132,7 +149,7 @@ def _build_surgery_team(
     state = _build_state()
     evidence = _build_evidence(config)
     cardio = LLMProvider(config.cardiologist)
-    neuro = _make_neuro(config)
+    neuro = _get_neuro(config)
     return SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
     )
@@ -324,7 +341,7 @@ def _ab_conclude(test_id: str, verdict: str) -> dict:
 def _neurologist_pulse_impl() -> dict:
     """System health pulse check via neurologist."""
     config = _build_config()
-    neuro = _make_neuro(config)
+    neuro = _get_neuro(config)
     state = _build_state()
     evidence = _build_evidence(config)
     result = neurologist_pulse(
@@ -344,7 +361,7 @@ def _neurologist_pulse_impl() -> dict:
 def _neurologist_challenge_impl(topic: str, file_paths: Optional[list] = None, rounds: int = 1) -> dict:
     """Corrigibility skeptic challenge."""
     config = _build_config()
-    neuro = _make_neuro(config)
+    neuro = _get_neuro(config)
     evidence = _build_evidence(config)
 
     if rounds > 1:
@@ -384,7 +401,7 @@ def _introspect_impl() -> dict:
     except Exception:
         pass
     try:
-        providers["neurologist"] = _make_neuro(config)
+        providers["neurologist"] = _get_neuro(config)
     except Exception:
         pass
     results = introspect(providers)
@@ -403,7 +420,7 @@ def _introspect_impl() -> dict:
 def _ask_local_impl(prompt: str) -> dict:
     """Direct query to the neurologist."""
     config = _build_config()
-    neuro = _make_neuro(config)
+    neuro = _get_neuro(config)
     resp = ask_local(prompt, neuro)
     return {"ok": resp.ok, "content": resp.content}
 
@@ -548,6 +565,87 @@ def _capability_status(
         snap["capabilities"] = filtered
 
     return snap
+
+
+# ── Capability-adaptive tool implementations ─────────────────────────
+from three_surgeons.core.context_builder import build_runtime_context
+from three_surgeons.core.requirements import check_requirements, GateResult
+
+
+def _run_tool(reqs, cmd_fn, **kwargs) -> dict:
+    """Shared runner for capability-adaptive tools.
+
+    Builds RuntimeContext, checks gate, executes command, returns dict.
+    """
+    config = _build_config()
+    ctx = build_runtime_context(config)
+    gate, notes = check_requirements(reqs, ctx)
+
+    if gate == GateResult.BLOCKED:
+        return {"blocked": True, "blocked_reason": "; ".join(notes)}
+
+    result = cmd_fn(ctx, **kwargs)
+    output = result.to_dict()
+
+    if gate == GateResult.DEGRADED:
+        output["degradation_notes"] = notes
+
+    return output
+
+
+def _cap_status() -> dict:
+    from three_surgeons.core.status_commands import cmd_status, STATUS_REQS
+    return _run_tool(STATUS_REQS, cmd_status)
+
+
+def _cap_research_status() -> dict:
+    from three_surgeons.core.status_commands import cmd_research_status, RESEARCH_STATUS_REQS
+    return _run_tool(RESEARCH_STATUS_REQS, cmd_research_status)
+
+
+def _cap_ab_veto(test_id: str, reason: str) -> dict:
+    from three_surgeons.core.ab_lifecycle import cmd_ab_veto, AB_VETO_REQS
+    return _run_tool(AB_VETO_REQS, cmd_ab_veto, test_id=test_id, reason=reason)
+
+
+def _cap_ab_queue() -> dict:
+    from three_surgeons.core.ab_lifecycle import cmd_ab_queue, AB_QUEUE_REQS
+    return _run_tool(AB_QUEUE_REQS, cmd_ab_queue)
+
+
+def _cap_ab_start(test_id: str, duration_minutes: int = 30) -> dict:
+    from three_surgeons.core.ab_lifecycle import cmd_ab_start, AB_START_REQS
+    return _run_tool(AB_START_REQS, cmd_ab_start, test_id=test_id, duration_minutes=duration_minutes)
+
+
+def _cap_ab_measure(test_id: str) -> dict:
+    from three_surgeons.core.ab_lifecycle import cmd_ab_measure, AB_MEASURE_REQS
+    return _run_tool(AB_MEASURE_REQS, cmd_ab_measure, test_id=test_id)
+
+
+def _cap_ab_conclude(test_id: str, verdict: str) -> dict:
+    from three_surgeons.core.ab_lifecycle import cmd_ab_conclude, AB_CONCLUDE_REQS
+    return _run_tool(AB_CONCLUDE_REQS, cmd_ab_conclude, test_id=test_id, verdict=verdict)
+
+
+def _cap_ab_collaborate(topic: str) -> dict:
+    from three_surgeons.core.ab_lifecycle import cmd_ab_collaborate, AB_COLLABORATE_REQS
+    return _run_tool(AB_COLLABORATE_REQS, cmd_ab_collaborate, topic=topic)
+
+
+def _cap_research_evidence(topic: str) -> dict:
+    from three_surgeons.core.audit_commands import cmd_research_evidence, RESEARCH_EVIDENCE_REQS
+    return _run_tool(RESEARCH_EVIDENCE_REQS, cmd_research_evidence, topic=topic)
+
+
+def _cap_cardio_reverify(topic: str) -> dict:
+    from three_surgeons.core.audit_commands import cmd_cardio_reverify, CARDIO_REVERIFY_REQS
+    return _run_tool(CARDIO_REVERIFY_REQS, cmd_cardio_reverify, topic=topic)
+
+
+def _cap_deep_audit(topic: str) -> dict:
+    from three_surgeons.core.audit_commands import cmd_deep_audit, DEEP_AUDIT_REQS
+    return _run_tool(DEEP_AUDIT_REQS, cmd_deep_audit, topic=topic)
 
 
 # ── FastMCP wiring (optional -- gracefully degrades) ────────────────────
@@ -703,6 +801,63 @@ try:
         from three_surgeons.ide.event_bus import EventBus
         from three_surgeons.mcp.event_tools import event_poll as _poll
         return _poll(EventBus.get_instance(), stream_id)
+
+    # ── Capability-adaptive tools ──────────────────────────────────────
+
+    @_mcp_app.tool()
+    def cap_status() -> dict:
+        """System health and capability overview (capability-adaptive)."""
+        return _cap_status()
+
+    @_mcp_app.tool()
+    def cap_research_status() -> dict:
+        """Research budget and cost tracking (capability-adaptive)."""
+        return _cap_research_status()
+
+    @_mcp_app.tool()
+    def cap_ab_veto(test_id: str, reason: str) -> dict:
+        """Veto an A/B test (capability-adaptive)."""
+        return _cap_ab_veto(test_id=test_id, reason=reason)
+
+    @_mcp_app.tool()
+    def cap_ab_queue() -> dict:
+        """List A/B tests in the queue (capability-adaptive)."""
+        return _cap_ab_queue()
+
+    @_mcp_app.tool()
+    def cap_ab_start(test_id: str, duration_minutes: int = 30) -> dict:
+        """Start an A/B test (capability-adaptive)."""
+        return _cap_ab_start(test_id=test_id, duration_minutes=duration_minutes)
+
+    @_mcp_app.tool()
+    def cap_ab_measure(test_id: str) -> dict:
+        """Measure an active A/B test (capability-adaptive)."""
+        return _cap_ab_measure(test_id=test_id)
+
+    @_mcp_app.tool()
+    def cap_ab_conclude(test_id: str, verdict: str) -> dict:
+        """Conclude an A/B test (capability-adaptive)."""
+        return _cap_ab_conclude(test_id=test_id, verdict=verdict)
+
+    @_mcp_app.tool()
+    def cap_ab_collaborate(topic: str) -> dict:
+        """Multi-surgeon A/B test design (capability-adaptive)."""
+        return _cap_ab_collaborate(topic=topic)
+
+    @_mcp_app.tool()
+    def cap_research_evidence(topic: str) -> dict:
+        """Cross-check evidence with LLM analysis (capability-adaptive)."""
+        return _cap_research_evidence(topic=topic)
+
+    @_mcp_app.tool()
+    def cap_cardio_reverify(topic: str) -> dict:
+        """Multi-surgeon evidence reverification (capability-adaptive)."""
+        return _cap_cardio_reverify(topic=topic)
+
+    @_mcp_app.tool()
+    def cap_deep_audit(topic: str) -> dict:
+        """4-phase deep audit pipeline (capability-adaptive)."""
+        return _cap_deep_audit(topic=topic)
 
 except ImportError:
     # mcp SDK not installed -- tools are still usable as plain functions
