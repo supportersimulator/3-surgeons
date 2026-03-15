@@ -163,3 +163,40 @@ class TestCmdAbMeasure:
         ctx = _make_ctx(healthy_llms=1, state=state)
         result = cmd_ab_measure(ctx, test_id="nope")
         assert result.blocked is True
+
+
+class TestCmdAbConclude:
+    def test_import(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_conclude, AB_CONCLUDE_REQS
+        assert callable(cmd_ab_conclude)
+
+    def test_requirements(self):
+        from three_surgeons.core.ab_lifecycle import AB_CONCLUDE_REQS
+        assert AB_CONCLUDE_REQS.min_llms == 1
+        assert AB_CONCLUDE_REQS.preconditions == ["ab_test_active"]
+
+    def test_conclude_transitions_state(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_conclude
+        state = MagicMock()
+        test_data = {
+            "id": "test-1", "status": "active", "param": "x",
+            "variant_a": "old", "variant_b": "new", "hypothesis": "h",
+        }
+        state.get.return_value = json.dumps(test_data)
+        evidence = MagicMock()
+        ctx = _make_ctx(healthy_llms=1, state=state, evidence=evidence)
+        result = cmd_ab_conclude(ctx, test_id="test-1", verdict="variant_b")
+        assert result.success is True
+        assert result.data["verdict"] == "variant_b"
+        state.set.assert_called()
+
+    def test_conclude_records_evidence(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_conclude
+        state = MagicMock()
+        test_data = {"id": "t1", "status": "active", "param": "x",
+                     "variant_a": "a", "variant_b": "b", "hypothesis": "h"}
+        state.get.return_value = json.dumps(test_data)
+        evidence = MagicMock()
+        ctx = _make_ctx(healthy_llms=1, state=state, evidence=evidence)
+        cmd_ab_conclude(ctx, test_id="t1", verdict="variant_a")
+        evidence.record_observation.assert_called()

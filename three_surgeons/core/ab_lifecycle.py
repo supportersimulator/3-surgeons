@@ -240,3 +240,53 @@ def cmd_ab_measure(ctx: RuntimeContext, test_id: str) -> CommandResult:
         degraded=bool(degradation_notes),
         degradation_notes=degradation_notes,
     )
+
+
+def cmd_ab_conclude(
+    ctx: RuntimeContext,
+    test_id: str,
+    verdict: str,
+) -> CommandResult:
+    """Conclude an A/B test with a verdict."""
+    raw = ctx.state.get(f"ab_test:{test_id}")
+    if not raw:
+        return CommandResult.blocked_result(f"No A/B test with ID '{test_id}'.")
+
+    try:
+        test_data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return CommandResult.blocked_result(f"Corrupt test data for '{test_id}'.")
+
+    if test_data.get("status") != "active":
+        return CommandResult.blocked_result(
+            f"Test '{test_id}' is '{test_data.get('status')}', expected 'active'."
+        )
+
+    # Transition to concluded
+    now = time.time()
+    test_data["status"] = "concluded"
+    test_data["concluded_at"] = now
+    test_data["verdict"] = verdict
+
+    ctx.state.set(f"ab_test:{test_id}", json.dumps(test_data))
+    ctx.state.delete("ab_test:active")
+
+    # Record in evidence
+    if ctx.evidence:
+        try:
+            ctx.evidence.record_observation(
+                topic=f"ab_test:{test_id}",
+                observation=f"A/B test concluded: verdict={verdict}, hypothesis={test_data.get('hypothesis', '')}",
+                metadata={"verdict": verdict, "test_id": test_id},
+            )
+        except Exception as exc:
+            logger.warning("Failed to record conclusion in evidence: %s", exc)
+
+    return CommandResult(
+        success=True,
+        data={
+            "test_id": test_id,
+            "verdict": verdict,
+            "concluded_at": now,
+        },
+    )
