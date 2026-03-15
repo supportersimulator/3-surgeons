@@ -59,6 +59,50 @@ BASE_TOOLS: dict[str, ToolSpec] = {
         "fn_name": "_consensus",
         "description": "Confidence-weighted consensus on a claim",
     },
+    "cap_status": {
+        "fn_name": "_cap_status",
+        "description": "System health and capability overview",
+    },
+    "cap_research_status": {
+        "fn_name": "_cap_research_status",
+        "description": "Research budget and cost tracking",
+    },
+    "cap_ab_veto": {
+        "fn_name": "_cap_ab_veto",
+        "description": "Veto an A/B test",
+    },
+    "cap_ab_queue": {
+        "fn_name": "_cap_ab_queue",
+        "description": "List A/B tests in the queue",
+    },
+    "cap_ab_start": {
+        "fn_name": "_cap_ab_start",
+        "description": "Start an A/B test",
+    },
+    "cap_ab_measure": {
+        "fn_name": "_cap_ab_measure",
+        "description": "Measure an active A/B test",
+    },
+    "cap_ab_conclude": {
+        "fn_name": "_cap_ab_conclude",
+        "description": "Conclude an A/B test with verdict",
+    },
+    "cap_ab_collaborate": {
+        "fn_name": "_cap_ab_collaborate",
+        "description": "Multi-surgeon A/B test design",
+    },
+    "cap_research_evidence": {
+        "fn_name": "_cap_research_evidence",
+        "description": "Cross-check evidence with LLM analysis",
+    },
+    "cap_cardio_reverify": {
+        "fn_name": "_cap_cardio_reverify",
+        "description": "Multi-surgeon evidence reverification",
+    },
+    "cap_deep_audit": {
+        "fn_name": "_cap_deep_audit",
+        "description": "4-phase deep audit pipeline",
+    },
 }
 
 
