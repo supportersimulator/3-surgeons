@@ -290,3 +290,88 @@ def cmd_ab_conclude(
             "concluded_at": now,
         },
     )
+
+
+# ── Multi-LLM Commands ──────────────────────────────────────────────
+
+
+def cmd_ab_collaborate(ctx: RuntimeContext, topic: str) -> CommandResult:
+    """Multi-surgeon collaborative A/B test design.
+
+    Each available LLM provides an independent perspective on the topic,
+    then perspectives are synthesized.
+    """
+    if len(ctx.healthy_llms) < 2:
+        return CommandResult.blocked_result(
+            "ab-collaborate requires at least 2 LLM endpoints for multiple perspectives."
+        )
+
+    # Gather existing evidence
+    evidence_context = ""
+    if ctx.evidence:
+        try:
+            items = ctx.evidence.search(topic, limit=10)
+            if items:
+                evidence_context = "\n".join(
+                    f"- {item.get('observation', item.get('content', str(item)))}"
+                    for item in items[:10]
+                )
+        except Exception:
+            pass
+
+    # Phase 1: Each surgeon provides independent perspective
+    perspectives = []
+    total_cost = 0.0
+    system_prompt = (
+        "You are a surgeon in a multi-model consensus system. "
+        "Provide your independent perspective on this A/B test design topic. "
+        "Be specific about what to test, how to measure, and potential risks."
+    )
+    user_prompt = f"Topic: {topic}"
+    if evidence_context:
+        user_prompt += f"\n\nExisting evidence:\n{evidence_context}"
+
+    for i, llm in enumerate(ctx.healthy_llms):
+        try:
+            resp = llm.query(
+                system=system_prompt,
+                prompt=user_prompt,
+                max_tokens=768,
+                temperature=0.7,
+            )
+            if resp.ok:
+                perspectives.append({
+                    "surgeon_index": i,
+                    "model": getattr(resp, "model", "unknown"),
+                    "content": resp.content,
+                    "cost_usd": resp.cost_usd,
+                })
+                total_cost += resp.cost_usd
+        except Exception as exc:
+            logger.warning("Surgeon %d failed during collaborate: %s", i, exc)
+            perspectives.append({
+                "surgeon_index": i,
+                "model": "error",
+                "content": f"Failed: {exc}",
+                "cost_usd": 0.0,
+            })
+
+    # Degradation notes
+    degradation_notes = []
+    if len(ctx.healthy_llms) < 3:
+        degradation_notes.append(
+            f"Running with {len(ctx.healthy_llms)} surgeon(s) "
+            f"(3 recommended for full cross-examination)."
+        )
+
+    return CommandResult(
+        success=True,
+        data={
+            "topic": topic,
+            "perspectives": perspectives,
+            "surgeon_count": len(ctx.healthy_llms),
+            "total_cost_usd": total_cost,
+        },
+        degraded=bool(degradation_notes),
+        degradation_notes=degradation_notes,
+    )

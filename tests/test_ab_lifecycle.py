@@ -200,3 +200,42 @@ class TestCmdAbConclude:
         ctx = _make_ctx(healthy_llms=1, state=state, evidence=evidence)
         cmd_ab_conclude(ctx, test_id="t1", verdict="variant_a")
         evidence.record_observation.assert_called()
+
+
+class TestCmdAbCollaborate:
+    def test_import(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_collaborate, AB_COLLABORATE_REQS
+        assert callable(cmd_ab_collaborate)
+
+    def test_requirements(self):
+        from three_surgeons.core.ab_lifecycle import AB_COLLABORATE_REQS
+        assert AB_COLLABORATE_REQS.min_llms == 2
+        assert AB_COLLABORATE_REQS.recommended_llms == 3
+
+    def test_collaborate_returns_design(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_collaborate
+        state = MagicMock()
+        evidence = MagicMock()
+        evidence.search.return_value = []
+        llm1 = MagicMock()
+        llm1.query.return_value = MagicMock(
+            ok=True, content="Proposed test design: ...", cost_usd=0.02
+        )
+        llm2 = MagicMock()
+        llm2.query.return_value = MagicMock(
+            ok=True, content="Review: design looks solid", cost_usd=0.01
+        )
+        ctx = _make_ctx(healthy_llms=2, state=state, evidence=evidence)
+        ctx.healthy_llms = [llm1, llm2]
+        result = cmd_ab_collaborate(ctx, topic="Should we switch to async?")
+        assert result.success is True
+        assert "design" in result.data or "perspectives" in result.data
+
+    def test_collaborate_blocked_with_one_llm(self):
+        """ab-collaborate requires at least 2 LLMs by definition."""
+        from three_surgeons.core.ab_lifecycle import AB_COLLABORATE_REQS
+        from three_surgeons.core.requirements import check_requirements
+        ctx = _make_ctx(healthy_llms=1)
+        gate, notes = check_requirements(AB_COLLABORATE_REQS, ctx)
+        from three_surgeons.core.requirements import GateResult
+        assert gate == GateResult.BLOCKED
