@@ -121,3 +121,45 @@ class TestCmdAbStart:
         ctx = _make_ctx(healthy_llms=1, state=state)
         result = cmd_ab_start(ctx, test_id="nope")
         assert result.blocked is True
+
+
+class TestCmdAbMeasure:
+    def test_import(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_measure, AB_MEASURE_REQS
+        assert callable(cmd_ab_measure)
+
+    def test_requirements(self):
+        from three_surgeons.core.ab_lifecycle import AB_MEASURE_REQS
+        assert AB_MEASURE_REQS.min_llms == 1
+        assert AB_MEASURE_REQS.preconditions == ["ab_test_active"]
+        assert AB_MEASURE_REQS.recommended_llms == 2
+
+    def test_measure_returns_assessment(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_measure
+        state = MagicMock()
+        test_data = {
+            "id": "test-1", "status": "active", "param": "x",
+            "variant_a": "old", "variant_b": "new", "hypothesis": "h",
+            "activated_at": time.time() - 600,
+        }
+        state.get.return_value = json.dumps(test_data)
+        evidence = MagicMock()
+        evidence.search.return_value = [
+            {"topic": "ab_test:test-1", "observation": "variant_b faster"},
+        ]
+        llm = MagicMock()
+        llm.query.return_value = MagicMock(
+            ok=True, content="Variant B shows improvement", cost_usd=0.01
+        )
+        ctx = _make_ctx(healthy_llms=1, state=state, evidence=evidence)
+        result = cmd_ab_measure(ctx, test_id="test-1")
+        assert result.success is True
+        assert "assessment" in result.data
+
+    def test_measure_missing_test(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_measure
+        state = MagicMock()
+        state.get.return_value = None
+        ctx = _make_ctx(healthy_llms=1, state=state)
+        result = cmd_ab_measure(ctx, test_id="nope")
+        assert result.blocked is True
