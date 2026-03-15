@@ -1275,6 +1275,133 @@ def migrate_evidence(ctx: click.Context, dry_run: bool, revert: bool) -> None:
         ctx.exit(1)
 
 
+# -- capability-adaptive commands -------------------------------------------
+
+from three_surgeons.core.context_builder import build_runtime_context
+from three_surgeons.core.requirements import check_requirements, GateResult
+
+
+def _run_command(ctx: click.Context, reqs, cmd_fn, **kwargs):
+    """Shared runner: build context -> gate check -> execute -> format output."""
+    config = ctx.obj["config"]
+    runtime_ctx = build_runtime_context(config)
+    gate, notes = check_requirements(reqs, runtime_ctx)
+
+    if gate == GateResult.BLOCKED:
+        click.echo("BLOCKED:", err=True)
+        for note in notes:
+            click.echo(f"  - {note}", err=True)
+        ctx.exit(1)
+        return
+
+    result = cmd_fn(runtime_ctx, **kwargs)
+    output = result.to_dict()
+
+    if gate == GateResult.DEGRADED:
+        output["degradation_notes"] = notes
+
+    click.echo(yaml.dump(output, default_flow_style=False))
+
+
+@cli.command("status")
+@click.pass_context
+def cmd_status_cli(ctx: click.Context) -> None:
+    """System health and capability overview."""
+    from three_surgeons.core.status_commands import cmd_status, STATUS_REQS
+    _run_command(ctx, STATUS_REQS, cmd_status)
+
+
+@cli.command("research-status")
+@click.pass_context
+def cmd_research_status_cli(ctx: click.Context) -> None:
+    """Research budget and cost tracking."""
+    from three_surgeons.core.status_commands import cmd_research_status, RESEARCH_STATUS_REQS
+    _run_command(ctx, RESEARCH_STATUS_REQS, cmd_research_status)
+
+
+@cli.command("ab-veto")
+@click.option("--test-id", required=True, help="A/B test ID to veto")
+@click.option("--reason", required=True, help="Reason for veto")
+@click.pass_context
+def cmd_ab_veto_cli(ctx: click.Context, test_id: str, reason: str) -> None:
+    """Veto an A/B test."""
+    from three_surgeons.core.ab_lifecycle import cmd_ab_veto, AB_VETO_REQS
+    _run_command(ctx, AB_VETO_REQS, cmd_ab_veto, test_id=test_id, reason=reason)
+
+
+@cli.command("ab-queue")
+@click.pass_context
+def cmd_ab_queue_cli(ctx: click.Context) -> None:
+    """List A/B tests in the queue."""
+    from three_surgeons.core.ab_lifecycle import cmd_ab_queue, AB_QUEUE_REQS
+    _run_command(ctx, AB_QUEUE_REQS, cmd_ab_queue)
+
+
+@cli.command("ab-start")
+@click.option("--test-id", required=True, help="A/B test ID to start")
+@click.option("--duration", "duration_minutes", default=30, type=int, help="Duration in minutes")
+@click.pass_context
+def cmd_ab_start_cli(ctx: click.Context, test_id: str, duration_minutes: int) -> None:
+    """Start (activate) a proposed A/B test."""
+    from three_surgeons.core.ab_lifecycle import cmd_ab_start, AB_START_REQS
+    _run_command(ctx, AB_START_REQS, cmd_ab_start, test_id=test_id, duration_minutes=duration_minutes)
+
+
+@cli.command("ab-measure")
+@click.option("--test-id", required=True, help="A/B test ID to measure")
+@click.pass_context
+def cmd_ab_measure_cli(ctx: click.Context, test_id: str) -> None:
+    """Measure an active A/B test."""
+    from three_surgeons.core.ab_lifecycle import cmd_ab_measure, AB_MEASURE_REQS
+    _run_command(ctx, AB_MEASURE_REQS, cmd_ab_measure, test_id=test_id)
+
+
+@cli.command("ab-conclude")
+@click.option("--test-id", required=True, help="A/B test ID to conclude")
+@click.option("--verdict", required=True, help="Verdict (variant_a, variant_b, inconclusive)")
+@click.pass_context
+def cmd_ab_conclude_cli(ctx: click.Context, test_id: str, verdict: str) -> None:
+    """Conclude an A/B test with a verdict."""
+    from three_surgeons.core.ab_lifecycle import cmd_ab_conclude, AB_CONCLUDE_REQS
+    _run_command(ctx, AB_CONCLUDE_REQS, cmd_ab_conclude, test_id=test_id, verdict=verdict)
+
+
+@cli.command("ab-collaborate")
+@click.option("--topic", required=True, help="Topic for multi-surgeon collaboration")
+@click.pass_context
+def cmd_ab_collaborate_cli(ctx: click.Context, topic: str) -> None:
+    """Multi-surgeon collaborative A/B test design."""
+    from three_surgeons.core.ab_lifecycle import cmd_ab_collaborate, AB_COLLABORATE_REQS
+    _run_command(ctx, AB_COLLABORATE_REQS, cmd_ab_collaborate, topic=topic)
+
+
+@cli.command("research-evidence")
+@click.option("--topic", required=True, help="Topic to cross-check evidence for")
+@click.pass_context
+def cmd_research_evidence_cli(ctx: click.Context, topic: str) -> None:
+    """Cross-check evidence store with LLM analysis."""
+    from three_surgeons.core.audit_commands import cmd_research_evidence, RESEARCH_EVIDENCE_REQS
+    _run_command(ctx, RESEARCH_EVIDENCE_REQS, cmd_research_evidence, topic=topic)
+
+
+@cli.command("cardio-reverify")
+@click.option("--topic", required=True, help="Topic to reverify evidence for")
+@click.pass_context
+def cmd_cardio_reverify_cli(ctx: click.Context, topic: str) -> None:
+    """Multi-surgeon reverification of evidence."""
+    from three_surgeons.core.audit_commands import cmd_cardio_reverify, CARDIO_REVERIFY_REQS
+    _run_command(ctx, CARDIO_REVERIFY_REQS, cmd_cardio_reverify, topic=topic)
+
+
+@cli.command("deep-audit")
+@click.option("--topic", required=True, help="Topic for deep audit")
+@click.pass_context
+def cmd_deep_audit_cli(ctx: click.Context, topic: str) -> None:
+    """4-phase deep audit pipeline."""
+    from three_surgeons.core.audit_commands import cmd_deep_audit, DEEP_AUDIT_REQS
+    _run_command(ctx, DEEP_AUDIT_REQS, cmd_deep_audit, topic=topic)
+
+
 # -- main entry point -------------------------------------------------------
 
 
