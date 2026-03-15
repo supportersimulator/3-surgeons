@@ -99,3 +99,64 @@ class TestCmdCardioReverify:
         ctx = _make_ctx(healthy_llms=2, git=False)
         gate, _ = check_requirements(CARDIO_REVERIFY_REQS, ctx)
         assert gate == GateResult.BLOCKED
+
+
+class TestCmdDeepAudit:
+    def test_import(self):
+        from three_surgeons.core.audit_commands import cmd_deep_audit, DEEP_AUDIT_REQS
+        assert callable(cmd_deep_audit)
+
+    def test_requirements(self):
+        from three_surgeons.core.audit_commands import DEEP_AUDIT_REQS
+        assert DEEP_AUDIT_REQS.min_llms == 1
+        assert DEEP_AUDIT_REQS.needs_git is True
+        assert DEEP_AUDIT_REQS.recommended_llms == 3
+
+    def test_deep_audit_success(self):
+        from three_surgeons.core.audit_commands import cmd_deep_audit
+        evidence = MagicMock()
+        evidence.search.return_value = []
+        llm = MagicMock()
+        llm.query.return_value = MagicMock(
+            ok=True, content="Audit findings: no issues", cost_usd=0.05
+        )
+        ctx = _make_ctx(healthy_llms=1, evidence=evidence, git=True, git_root="/repo")
+        ctx.healthy_llms = [llm]
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "three_surgeons.core.audit_commands._get_recent_git_files",
+                lambda *a, **kw: ["src/main.py", "src/config.py"],
+            )
+            result = cmd_deep_audit(ctx, topic="architecture review")
+
+        assert result.success is True
+        assert "phases" in result.data or "audit" in result.data
+
+    def test_deep_audit_blocked_no_git(self):
+        from three_surgeons.core.audit_commands import DEEP_AUDIT_REQS
+        from three_surgeons.core.requirements import GateResult, check_requirements
+        ctx = _make_ctx(healthy_llms=1, git=False)
+        gate, _ = check_requirements(DEEP_AUDIT_REQS, ctx)
+        assert gate == GateResult.BLOCKED
+
+    def test_deep_audit_degraded_one_llm(self):
+        from three_surgeons.core.audit_commands import cmd_deep_audit
+        evidence = MagicMock()
+        evidence.search.return_value = []
+        llm = MagicMock()
+        llm.query.return_value = MagicMock(
+            ok=True, content="Audit: single surgeon mode", cost_usd=0.03
+        )
+        ctx = _make_ctx(healthy_llms=1, evidence=evidence, git=True, git_root="/repo")
+        ctx.healthy_llms = [llm]
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "three_surgeons.core.audit_commands._get_recent_git_files",
+                lambda *a, **kw: ["src/main.py"],
+            )
+            result = cmd_deep_audit(ctx, topic="test")
+
+        assert result.degraded is True
+        assert any("surgeon" in n.lower() for n in result.degradation_notes)

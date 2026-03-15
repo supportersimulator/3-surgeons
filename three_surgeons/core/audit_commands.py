@@ -197,3 +197,119 @@ def cmd_cardio_reverify(ctx: RuntimeContext, topic: str) -> CommandResult:
         degraded=bool(degradation_notes),
         degradation_notes=degradation_notes,
     )
+
+
+def cmd_deep_audit(ctx: RuntimeContext, topic: str) -> CommandResult:
+    """4-phase deep audit pipeline — most comprehensive analysis.
+
+    Phase 1: Document/file discovery from git
+    Phase 2: Evidence gathering from store
+    Phase 3: LLM analysis (each surgeon independently)
+    Phase 4: Cross-check and synthesis
+    """
+    phases: Dict[str, Any] = {}
+    total_cost = 0.0
+
+    # Phase 1: File discovery
+    recent_files = _get_recent_git_files(ctx.git_root or ".", days=14, limit=30)
+    phases["discovery"] = {
+        "files_found": len(recent_files),
+        "sample": recent_files[:10],
+    }
+
+    # Phase 2: Evidence gathering
+    evidence_items = []
+    if ctx.evidence:
+        try:
+            evidence_items = ctx.evidence.search(topic, limit=30)
+        except Exception:
+            pass
+    phases["evidence"] = {
+        "items_found": len(evidence_items),
+    }
+
+    # Phase 3: LLM analysis — each surgeon independently
+    evidence_text = "\n".join(
+        f"- {item.get('observation', str(item))}"
+        for item in evidence_items[:15]
+    )
+    file_list = "\n".join(f"- {f}" for f in recent_files[:15])
+
+    system_prompt = (
+        "You are performing a deep audit. Analyze the topic against the evidence "
+        "and codebase state. Identify risks, gaps, and recommendations."
+    )
+    user_prompt = (
+        f"Topic: {topic}\n\n"
+        f"Evidence ({len(evidence_items)} items):\n{evidence_text}\n\n"
+        f"Recent files ({len(recent_files)}):\n{file_list}"
+    )
+
+    surgeon_reports = []
+    for i, llm in enumerate(ctx.healthy_llms):
+        try:
+            resp = llm.query(
+                system=system_prompt,
+                prompt=user_prompt,
+                max_tokens=1024,
+                temperature=0.3,
+            )
+            if resp.ok:
+                surgeon_reports.append({
+                    "surgeon_index": i,
+                    "model": getattr(resp, "model", "unknown"),
+                    "content": resp.content,
+                    "cost_usd": resp.cost_usd,
+                })
+                total_cost += resp.cost_usd
+        except Exception as exc:
+            logger.warning("Surgeon %d failed during deep-audit: %s", i, exc)
+
+    phases["analysis"] = {
+        "surgeon_count": len(ctx.healthy_llms),
+        "reports": surgeon_reports,
+    }
+
+    # Phase 4: Cross-check (if 2+ surgeons, use first to synthesize)
+    synthesis = None
+    if len(surgeon_reports) >= 2 and ctx.healthy_llms:
+        all_reports = "\n\n".join(
+            f"Surgeon {r['surgeon_index']} ({r.get('model', '?')}):\n{r['content']}"
+            for r in surgeon_reports
+        )
+        try:
+            resp = ctx.healthy_llms[0].query(
+                system="Synthesize the surgeon reports. Highlight agreements, disagreements, and blind spots.",
+                prompt=all_reports,
+                max_tokens=768,
+                temperature=0.3,
+            )
+            if resp.ok:
+                synthesis = resp.content
+                total_cost += resp.cost_usd
+        except Exception as exc:
+            logger.warning("Synthesis failed: %s", exc)
+
+    phases["cross_check"] = {
+        "synthesis": synthesis,
+    }
+
+    degradation_notes = []
+    if len(ctx.healthy_llms) < 3:
+        degradation_notes.append(
+            f"Running with {len(ctx.healthy_llms)} surgeon(s) "
+            f"(3 recommended). No cross-validation."
+            if len(ctx.healthy_llms) == 1
+            else f"Running with {len(ctx.healthy_llms)} surgeon(s) (3 recommended)."
+        )
+
+    return CommandResult(
+        success=True,
+        data={
+            "topic": topic,
+            "phases": phases,
+            "total_cost_usd": total_cost,
+        },
+        degraded=bool(degradation_notes),
+        degradation_notes=degradation_notes,
+    )
