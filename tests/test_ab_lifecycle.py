@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -82,3 +83,41 @@ class TestCmdAbQueue:
         result = cmd_ab_queue(ctx)
         assert result.success is True
         assert result.data["tests"] == []
+
+
+class TestCmdAbStart:
+    def test_import(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_start, AB_START_REQS
+        assert callable(cmd_ab_start)
+
+    def test_requirements(self):
+        from three_surgeons.core.ab_lifecycle import AB_START_REQS
+        assert AB_START_REQS.min_llms == 1
+        assert AB_START_REQS.needs_state is True
+        assert AB_START_REQS.needs_evidence is True
+        assert AB_START_REQS.preconditions == ["ab_test_proposed"]
+
+    def test_start_transitions_to_active(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_start
+        state = MagicMock()
+        test_data = {
+            "id": "test-1", "status": "proposed", "param": "x",
+            "variant_a": "old", "variant_b": "new", "hypothesis": "h",
+        }
+        state.get.return_value = json.dumps(test_data)
+        evidence = MagicMock()
+        llm = MagicMock()
+        llm.query.return_value = MagicMock(ok=True, content="Grace period validated", cost_usd=0.01)
+        ctx = _make_ctx(healthy_llms=1, state=state, evidence=evidence)
+        result = cmd_ab_start(ctx, test_id="test-1", duration_minutes=30)
+        assert result.success is True
+        assert result.data["status"] == "active"
+        state.set.assert_called()
+
+    def test_start_missing_test(self):
+        from three_surgeons.core.ab_lifecycle import cmd_ab_start
+        state = MagicMock()
+        state.get.return_value = None
+        ctx = _make_ctx(healthy_llms=1, state=state)
+        result = cmd_ab_start(ctx, test_id="nope")
+        assert result.blocked is True
