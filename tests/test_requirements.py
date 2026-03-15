@@ -79,3 +79,94 @@ def test_blocked_result_helper():
     assert result.blocked is True
     assert result.blocked_reason == "No git repo found"
     assert result.data == {}
+
+
+from unittest.mock import MagicMock
+from three_surgeons.core.requirements import RuntimeContext, check_requirements
+
+
+def _make_ctx(healthy_llms=0, state=True, evidence=True, git=False, git_root=None, precondition_checker=None):
+    """Helper to build RuntimeContext for tests."""
+    llms = [MagicMock() for _ in range(healthy_llms)]
+    return RuntimeContext(
+        healthy_llms=llms,
+        state=MagicMock() if state else None,
+        evidence=MagicMock() if evidence else None,
+        git_available=git,
+        git_root=git_root,
+        config=MagicMock(),
+        precondition_checker=precondition_checker,
+    )
+
+
+class TestCheckRequirements:
+    def test_proceed_no_requirements(self):
+        ctx = _make_ctx()
+        reqs = CommandRequirements()
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.PROCEED
+        assert notes == []
+
+    def test_blocked_insufficient_llms(self):
+        ctx = _make_ctx(healthy_llms=0)
+        reqs = CommandRequirements(min_llms=1)
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.BLOCKED
+        assert "LLM" in notes[0]
+
+    def test_blocked_needs_state(self):
+        ctx = _make_ctx(state=False)
+        reqs = CommandRequirements(needs_state=True)
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.BLOCKED
+        assert "state" in notes[0].lower()
+
+    def test_blocked_needs_evidence(self):
+        ctx = _make_ctx(evidence=False)
+        reqs = CommandRequirements(needs_evidence=True)
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.BLOCKED
+        assert "evidence" in notes[0].lower()
+
+    def test_blocked_needs_git(self):
+        ctx = _make_ctx(git=False)
+        reqs = CommandRequirements(needs_git=True)
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.BLOCKED
+        assert "git" in notes[0].lower()
+
+    def test_degraded_fewer_than_recommended_llms(self):
+        ctx = _make_ctx(healthy_llms=1)
+        reqs = CommandRequirements(min_llms=1, recommended_llms=3)
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.DEGRADED
+        assert "1" in notes[0] and "3" in notes[0]
+
+    def test_proceed_meets_recommended(self):
+        ctx = _make_ctx(healthy_llms=3)
+        reqs = CommandRequirements(min_llms=1, recommended_llms=3)
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.PROCEED
+
+    def test_blocked_precondition_fails(self):
+        checker = MagicMock(return_value=(False, "No active A/B test"))
+        ctx = _make_ctx(precondition_checker=checker)
+        reqs = CommandRequirements(preconditions=["ab_test_active"])
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.BLOCKED
+        assert "A/B test" in notes[0]
+        checker.assert_called_once_with("ab_test_active")
+
+    def test_proceed_precondition_passes(self):
+        checker = MagicMock(return_value=(True, ""))
+        ctx = _make_ctx(precondition_checker=checker)
+        reqs = CommandRequirements(preconditions=["ab_test_active"])
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.PROCEED
+
+    def test_blocked_takes_priority_over_degraded(self):
+        """If both blocked and degraded conditions exist, blocked wins."""
+        ctx = _make_ctx(healthy_llms=0)
+        reqs = CommandRequirements(min_llms=1, recommended_llms=3)
+        gate, notes = check_requirements(reqs, ctx)
+        assert gate == GateResult.BLOCKED
