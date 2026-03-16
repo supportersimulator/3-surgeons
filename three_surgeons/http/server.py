@@ -191,6 +191,19 @@ BASE_TOOLS: dict[str, ToolSpec] = {
         "fn_name": "event_poll",
         "description": "Poll for events on subscription stream",
     },
+    # Chain orchestration
+    "cap_chain_run": {
+        "fn_name": "_cap_chain_run",
+        "description": "Execute a chain preset",
+    },
+    "cap_chain_presets": {
+        "fn_name": "_cap_chain_presets",
+        "description": "List available chain presets",
+    },
+    "cap_chain_suggest": {
+        "fn_name": "_cap_chain_suggest",
+        "description": "Show mode suggestions for trigger",
+    },
 }
 
 

@@ -648,6 +648,68 @@ def _cap_deep_audit(topic: str, file_paths: list[str] | None = None) -> dict:
     return _run_tool(DEEP_AUDIT_REQS, cmd_deep_audit, topic=topic, file_paths=file_paths)
 
 
+# ── Chain orchestration tools ─────────────────────────────────────────
+
+def _cap_chain_run(mode: str, topic: str = "") -> dict:
+    """Execute a chain preset."""
+    from three_surgeons.core.chains import ChainExecutor, SEGMENT_REGISTRY
+    from three_surgeons.core.mode_authority import ModeAuthority
+
+    config = _build_config()
+    ctx = build_runtime_context(config)
+    state = ctx.state
+
+    ma = ModeAuthority(state)
+    try:
+        segments = ma.resolve(mode, {})
+    except KeyError as exc:
+        return {"error": str(exc)}
+
+    # Filter to registered segments
+    segments = [s for s in segments if s in SEGMENT_REGISTRY]
+    if not segments:
+        return {"error": "No registered segments for this mode"}
+
+    executor = ChainExecutor(state_backend=state)
+    result = executor.run(segments, ctx, initial_data={"topic": topic})
+
+    return {
+        "mode": mode,
+        "segments_run": list(result.segment_results.keys()),
+        "segments_skipped": [s[0] for s in result.skipped],
+        "errors": [{"segment": s, "error": e} for s, e in result.errors],
+        "halted": result.halted,
+        "duration_ms": result.total_ns / 1_000_000,
+        "success": len(result.errors) == 0 and not result.halted,
+    }
+
+
+def _cap_chain_presets() -> dict:
+    """List all available chain presets."""
+    from three_surgeons.core.mode_authority import PRESETS
+    return {"presets": {name: segs for name, segs in PRESETS.items()}}
+
+
+def _cap_chain_suggest(trigger: str = "") -> dict:
+    """Show mode suggestions based on trigger."""
+    from three_surgeons.core.mode_authority import ModeAuthority
+
+    config = _build_config()
+    ctx = build_runtime_context(config)
+    ma = ModeAuthority(ctx.state)
+
+    suggestion = ma.suggest(ctx, trigger)
+    if suggestion:
+        return {
+            "suggestion": {
+                "mode": suggestion.mode,
+                "trigger": suggestion.trigger,
+                "message": suggestion.message,
+            }
+        }
+    return {"suggestion": None}
+
+
 # ── FastMCP wiring (optional -- gracefully degrades) ────────────────────
 
 _mcp_app = None

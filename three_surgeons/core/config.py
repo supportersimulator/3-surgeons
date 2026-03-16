@@ -170,6 +170,35 @@ class UpgradeConfig:
 
 
 @dataclass
+class ChainConfig:
+    """Chain orchestration configuration."""
+    default_mode: str = "lightweight"
+    auto_suggest: bool = True
+
+
+@dataclass
+class ConsultationConfig:
+    """Surgeon consultation configuration."""
+    cadence: int = 20
+    community_sync: bool = True
+    community_repo: str = "origin"
+    community_branch: str = "community-chains"
+    auto_accept_threshold: float = 0.90
+    budget_per_consultation_usd: float = 0.02
+
+
+@dataclass
+class TelemetryConfig:
+    """Chain telemetry configuration."""
+    enabled: bool = True
+    retention_days: int = 90
+    min_observations_for_pattern: int = 5
+    min_frequency_for_pattern: float = 0.75
+    min_observations_for_dependency: int = 20
+    min_correlation_for_dependency: float = 0.80
+
+
+@dataclass
 class Config:
     """Top-level configuration for the 3-Surgeons system.
 
@@ -202,6 +231,9 @@ class Config:
     queue: QueueConfig = field(default_factory=QueueConfig)
     upgrade: UpgradeConfig = field(default_factory=UpgradeConfig)
     read_only: bool = False
+    chains: ChainConfig = field(default_factory=ChainConfig)
+    consultation: ConsultationConfig = field(default_factory=ConsultationConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
     @classmethod
     def from_yaml(cls, path: Path) -> Config:
@@ -313,6 +345,18 @@ class Config:
         upgrade_raw = raw.get("upgrade", {})
         if isinstance(upgrade_raw, dict):
             cfg.upgrade = _merge_dataclass(cfg.upgrade, upgrade_raw)
+
+        chains_raw = raw.get("chains", {})
+        if isinstance(chains_raw, dict):
+            cfg.chains = _merge_dataclass(cfg.chains, chains_raw)
+
+        consultation_raw = raw.get("consultation", {})
+        if isinstance(consultation_raw, dict):
+            cfg.consultation = _merge_dataclass(cfg.consultation, consultation_raw)
+
+        telemetry_raw = raw.get("telemetry", {})
+        if isinstance(telemetry_raw, dict):
+            cfg.telemetry = _merge_dataclass(cfg.telemetry, telemetry_raw)
 
         return cfg
 
