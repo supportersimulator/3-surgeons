@@ -1,16 +1,66 @@
 # 3-Surgeons
 
-Multi-model consensus system for Claude Code. Three LLMs cross-examine each other to catch blind spots on critical decisions.
+**Three AI surgeons. One operating table. Your code doesn't ship until all three agree.**
 
-## Why
+> Would you wing a complicated surgery with one surgeon?
+>
+> Then why are you shipping code reviewed by one AI?
 
-Claude may confabulate confidently where GPT hedges. A local model catches patterns that API models miss due to token limits. **The value is in the disagreements, not the agreements.**
+## The Problem
 
-| Surgeon | Role | Default Model |
-|---------|------|---------------|
-| **Atlas** (Head Surgeon) | Synthesizes, decides, implements | Claude (this session) |
-| **Cardiologist** | External perspective, cross-examination | GPT-4.1-mini (OpenAI) |
-| **Neurologist** | Pattern recognition, corrigibility checks | Qwen3-4B (Ollama) |
+Every AI coding tool has the same flaw: **one model, one perspective, one set of blind spots.** Claude confabulates confidently where GPT hedges. GPT over-engineers where a local model stays lean. A single AI reviewer is a single point of failure — and you'd never accept that in a real operating room.
+
+## The Solution
+
+3-Surgeons puts three independent AI models on the same operating table. They don't just review — they **cross-examine**, challenge assumptions, and hunt for what the others missed. Your code ships only when all three agree it's ready.
+
+| | Surgeon | Role | Default Model |
+|---|---------|------|---------------|
+| 🔪 | **Head Surgeon** | Synthesizes, decides, implements | Claude (your IDE session) |
+| 🩺 | **Cardiologist** | External perspective, cross-examination | GPT-4.1-mini (OpenAI) |
+| 🧠 | **Neurologist** | Pattern recognition, corrigibility checks | Qwen3-4B (local, private) |
+
+## Why It Works: Corrigibility
+
+Most AI tools optimize for **confidence**. 3-Surgeons optimizes for **correctness**.
+
+The core principle: **no surgeon can conclude an opinion until an objective test of the opposing view yields legitimate data — only then is the opinion merited.**
+
+This isn't just "get a second opinion." It's an iterative consensus loop:
+
+1. **Each surgeon hunts independently** — different prompts, different search strategies, different biases
+2. **Cross-examination** — each surgeon reviews the others' findings and challenges weak points
+3. **Open exploration** — "What are we ALL blind to? What assumptions remain unchallenged?"
+4. **Consensus only when saturated** — disagreements are preserved, not suppressed
+
+Feel the difference between code that was *generated* and code that **survived**.
+
+## The 4-Phase Operating Protocol
+
+```
+┌─────────────┐    ┌──────────────┐    ┌─────────────┐    ┌───────────┐
+│  1. TRIAGE   │───▶│  2. OPERATE   │───▶│  3. REVIEW   │───▶│  4. CLOSE  │
+│  Assess risk │    │  Independent  │    │  Cross-exam  │    │  Consensus │
+│  Set gates   │    │  analysis     │    │  Challenge   │    │  or dissent│
+└─────────────┘    └──────────────┘    └─────────────┘    └───────────┘
+```
+
+**Triage** — Sentinel scans your change for complexity vectors and calibrates review intensity.
+**Operate** — Each surgeon analyzes independently. No groupthink.
+**Review** — Cross-examination. Each surgeon attacks the others' blind spots.
+**Close** — Consensus with confidence scores. Disagreements surfaced, never hidden.
+
+## Blast Radius Calibration
+
+Not every change needs a full surgery. 3-Surgeons adapts review intensity to risk:
+
+| Risk Level | Gate Intensity | When | Time |
+|------------|---------------|------|------|
+| **Light** | Sentinel scan only | Docs, config, cosmetic changes | <30s |
+| **Standard** | Sentinel + cross-exam + gains-gate | Feature work, refactors | <120s |
+| **Full** | All gates + counter-position + A/B | Architecture, security, schema, API changes | <300s |
+
+Risk is measured across blast radius, reversibility, security exposure, data impact, and external coupling. The highest-risk dimension determines the gate.
 
 ## Prerequisites
 
@@ -30,12 +80,31 @@ pyenv global 3.12
 
 The `3s init` wizard will check your Python version and guide you if it's too old.
 
+## Quick Start
+
+```bash
+# 1. Install (Claude Code)
+/plugin marketplace add supportersimulator/3-surgeons
+/plugin install 3-surgeons@supportersimulator/3-surgeons
+
+# 2. Run the setup wizard
+3s init
+
+# 3. Set your API key(s)
+export OPENAI_API_KEY=sk-...
+
+# 4. Verify all surgeons are reachable
+3s probe
+
+# 5. Your first cross-examination
+3s cross-exam "Should we use Redis or PostgreSQL for session storage?"
+```
+
 ## Install
 
 ### Claude Code (Marketplace)
 
 ```bash
-# Add the marketplace, then install
 /plugin marketplace add supportersimulator/3-surgeons
 /plugin install 3-surgeons@supportersimulator/3-surgeons
 ```
@@ -115,22 +184,6 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'
 
 All tools available via `3s serve` HTTP bridge. See `three_surgeons/config/ide-adapters/` for per-IDE configuration.
 
-## Quick Start
-
-```bash
-# 1. Run the setup wizard (picks a preset, writes config)
-3s init
-
-# 2. Set your API key(s) — see .env.example for all options
-export OPENAI_API_KEY=sk-...
-
-# 3. Verify all surgeons are reachable
-3s probe
-
-# 4. Cross-examine a decision
-3s cross-exam "Should we use Redis or PostgreSQL for session storage?"
-```
-
 ## Three Modes
 
 | Mode | Cardiologist | Neurologist | Needs | Cost |
@@ -181,6 +234,18 @@ See the [full provider matrix](skills/using-3-surgeons/SKILL.md#supported-provid
 3s ab-propose PARAM A B "hyp"   # Propose A/B test
 ```
 
+## Orchestration Chains
+
+Compose surgical operations into named, replayable chains:
+
+```bash
+3s chain run full-review        # Run a named chain preset
+3s chain list                   # Show available presets
+3s chain show full-review       # Inspect chain segments
+```
+
+Built-in presets: `full-review`, `quick-check`, `deep-audit`, `pre-merge`, `security-scan`. Chains are capability-adaptive — segments that require unavailable surgeons gracefully degrade or skip.
+
 ## Configuration
 
 Config lives in `~/.3surgeons/config.yaml` (user-level) or `.3surgeons.yaml` (project-level).
@@ -191,13 +256,26 @@ See `config/3surgeons.example.yaml` for the full schema.
 
 ## Security
 
-- **All API keys are loaded from environment variables** -- never hardcoded, never committed
+- **All API keys are loaded from environment variables** — never hardcoded, never committed
+- **Local-Only mode**: zero data leaves your machine. The Neurologist runs entirely on your hardware
 - `.gitignore` excludes all secret files, config files, and databases
 - See `.env.example` for the full list of supported environment variables
 
-## ContextDNA IDE Upgrade
+## Pairs With: Superpowers Plugin
 
-3-Surgeons works standalone. When you're ready for priority queue GPU scheduling, Redis state, and the full butler subconscious, the upgrade is one line:
+3-Surgeons provides the **epistemological layer** (truth calibration through multi-model consensus). The [Superpowers](https://github.com/supportersimulator/superpowers) plugin provides the **process layer** (workflow discipline, TDD, debugging, planning skills). Together they form a complete surgical operating environment — rigorous process AND rigorous truth-testing.
+
+---
+
+## ContextDNA: The Full Operating Theater
+
+3-Surgeons works standalone. But it was built to be the scalpel in a much larger operating theater.
+
+**ContextDNA** adds persistent memory, a priority-scheduled local LLM (your Neurologist on steroids), adaptive webhook injection, and a butler subconscious that learns your codebase across sessions. Think of it as upgrading from a field hospital to a world-class surgical suite.
+
+*3-Surgeons adapts to the sophistication of your codebase.*
+
+When you're ready:
 
 ```python
 from context_dna.adapters import priority_queue_adapter
@@ -215,4 +293,4 @@ See [docs/CONTEXTDNA-IDE-UPGRADE.md](docs/CONTEXTDNA-IDE-UPGRADE.md) for the ful
 
 ## License
 
-MIT -- see [LICENSE](LICENSE)
+MIT — see [LICENSE](LICENSE)
