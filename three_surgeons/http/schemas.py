@@ -182,6 +182,20 @@ class EventPollRequest(BaseModel):
     stream_id: str = Field(..., min_length=1, description="Stream ID to poll")
 
 
+class CapChainRunRequest(BaseModel):
+    mode: str = Field(..., min_length=1, description="Chain preset mode to execute")
+    topic: str = Field(default="", description="Topic for the chain")
+
+
+class CapChainPresetsRequest(BaseModel):
+    """No params needed for listing presets."""
+    pass
+
+
+class CapChainSuggestRequest(BaseModel):
+    trigger: str = Field(default="", description="Trigger context for mode suggestion")
+
+
 # Registry: tool name → schema class
 TOOL_SCHEMAS: dict[str, Type[BaseModel]] = {
     "probe": ProbeRequest,
@@ -219,4 +233,7 @@ TOOL_SCHEMAS: dict[str, Type[BaseModel]] = {
     "event_unsubscribe": EventUnsubscribeRequest,
     "event_publish": EventPublishRequest,
     "event_poll": EventPollRequest,
+    "cap_chain_run": CapChainRunRequest,
+    "cap_chain_presets": CapChainPresetsRequest,
+    "cap_chain_suggest": CapChainSuggestRequest,
 }
