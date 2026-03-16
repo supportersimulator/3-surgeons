@@ -1515,6 +1515,156 @@ def cmd_deep_audit_cli(ctx: click.Context, topic: str) -> None:
     _run_command(ctx, DEEP_AUDIT_REQS, cmd_deep_audit, topic=topic)
 
 
+# -- chain orchestration --------------------------------------------------------
+
+
+@cli.group("chain", invoke_without_command=True)
+@click.pass_context
+def chain_group(ctx: click.Context) -> None:
+    """Chain orchestration — composable multi-step surgical workflows."""
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@chain_group.command("run")
+@click.option("--mode", required=True, help="Preset name (full-3s, lightweight, plan-review, evidence-dive)")
+@click.option("--topic", default="", help="Topic for the chain execution")
+@click.pass_context
+def chain_run(ctx: click.Context, mode: str, topic: str) -> None:
+    """Execute a chain preset."""
+    from three_surgeons.core.chains import ChainExecutor, SEGMENT_REGISTRY
+    from three_surgeons.core.mode_authority import ModeAuthority
+
+    config = ctx.obj["config"]
+    runtime_ctx = build_runtime_context(config)
+    state = runtime_ctx.state
+
+    ma = ModeAuthority(state)
+    try:
+        segments = ma.resolve(mode, {})
+    except KeyError as exc:
+        click.echo(f"ERROR: {exc}", err=True)
+        ctx.exit(1)
+        return
+
+    # Check which segments are actually registered
+    missing = [s for s in segments if s not in SEGMENT_REGISTRY]
+    if missing:
+        click.echo(f"WARNING: Unregistered segments (will be skipped): {missing}", err=True)
+        segments = [s for s in segments if s in SEGMENT_REGISTRY]
+
+    if not segments:
+        click.echo("No registered segments to run.", err=True)
+        ctx.exit(1)
+        return
+
+    executor = ChainExecutor(state_backend=state)
+    result = executor.run(segments, runtime_ctx, initial_data={"topic": topic})
+
+    output = {
+        "mode": mode,
+        "segments_run": list(result.segment_results.keys()),
+        "segments_skipped": [s[0] for s in result.skipped],
+        "segments_degraded": [s[0] for s in result.degraded],
+        "errors": [{"segment": s, "error": e} for s, e in result.errors],
+        "halted": result.halted,
+        "duration_ms": result.total_ns / 1_000_000,
+        "success": len(result.errors) == 0 and not result.halted,
+    }
+    click.echo(yaml.dump(output, default_flow_style=False))
+
+
+@chain_group.command("presets")
+@click.pass_context
+def chain_presets(ctx: click.Context) -> None:
+    """List all available chain presets."""
+    from three_surgeons.core.mode_authority import PRESETS
+
+    click.echo("Available chain presets:\n")
+    for name, segments in PRESETS.items():
+        click.echo(f"  {name}:")
+        for seg in segments:
+            click.echo(f"    - {seg}")
+        click.echo()
+
+
+@chain_group.command("suggest")
+@click.option("--trigger", default="", help="Trigger type to check")
+@click.pass_context
+def chain_suggest(ctx: click.Context, trigger: str) -> None:
+    """Show available mode suggestions based on context."""
+    from three_surgeons.core.mode_authority import ModeAuthority
+
+    config = ctx.obj["config"]
+    runtime_ctx = build_runtime_context(config)
+    state = runtime_ctx.state
+
+    ma = ModeAuthority(state)
+    suggestion = ma.suggest(runtime_ctx, trigger)
+
+    if suggestion:
+        click.echo(f"Suggestion: {suggestion.message}")
+        click.echo(f"  Mode: {suggestion.mode}")
+        click.echo(f"  Trigger: {suggestion.trigger}")
+    else:
+        click.echo("No suggestions for current context.")
+
+
+@chain_group.command("history")
+@click.option("--chain-id", default="", help="Filter by chain ID")
+@click.option("--limit", default=10, help="Number of recent executions")
+@click.pass_context
+def chain_history(ctx: click.Context, chain_id: str, limit: int) -> None:
+    """Show recent chain executions."""
+    from three_surgeons.core.chain_telemetry import ChainTelemetry
+
+    config = ctx.obj["config"]
+    runtime_ctx = build_runtime_context(config)
+
+    tel = ChainTelemetry(runtime_ctx.state)
+    if chain_id:
+        execs = tel.recent_executions(chain_id, limit=limit)
+    else:
+        # Show all chains
+        execs = []
+        for preset in ["full-3s", "lightweight", "plan-review", "evidence-dive"]:
+            execs.extend(tel.recent_executions(preset, limit=limit))
+
+    if not execs:
+        click.echo("No chain executions recorded yet.")
+        return
+
+    for rec in execs:
+        status = "OK" if rec.success else "FAIL"
+        click.echo(
+            f"  [{status}] {rec.chain_id} "
+            f"({len(rec.segments_run)} segments, {rec.duration_ms:.0f}ms)"
+        )
+
+
+@chain_group.command("telemetry")
+@click.pass_context
+def chain_telemetry(ctx: click.Context) -> None:
+    """Show learning stats — patterns, dependencies, confidence."""
+    from three_surgeons.core.chain_telemetry import ChainTelemetry
+
+    config = ctx.obj["config"]
+    runtime_ctx = build_runtime_context(config)
+
+    tel = ChainTelemetry(runtime_ctx.state)
+    click.echo("Pattern detection results:\n")
+    for preset in ["full-3s", "lightweight", "plan-review", "evidence-dive"]:
+        patterns = tel.detect_patterns(preset)
+        if patterns:
+            click.echo(f"  {preset}:")
+            for p in patterns:
+                click.echo(
+                    f"    {p.grade.value} ({p.observations} obs, "
+                    f"{p.frequency:.0%} freq): {' -> '.join(p.segments)}"
+                )
+    click.echo("\nDone.")
+
+
 # -- main entry point -------------------------------------------------------
 
 
