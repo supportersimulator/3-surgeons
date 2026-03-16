@@ -158,3 +158,4 @@ class ChainExecutor:
             "chain:executions",
             json.dumps(record),
         )
+        self._state.increment("chain:total_executions")
