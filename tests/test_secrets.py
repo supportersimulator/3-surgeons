@@ -1,6 +1,9 @@
 """Tests for the secret detection and resolution module."""
 from __future__ import annotations
 
+import os
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from three_surgeons.core.secrets import (
@@ -8,6 +11,11 @@ from three_surgeons.core.secrets import (
     PROVIDER_KEY_MAP,
     RemediationPlan,
     SecretSource,
+    _probe_1password,
+    _probe_aws,
+    _probe_env,
+    _probe_keychain,
+    _probe_shell_profile,
 )
 
 
@@ -68,3 +76,122 @@ class TestDataStructures:
         d = plan.to_safe_dict()
         assert "resolved_value" not in str(d)
         assert d["status"] == "resolved"
+
+
+class TestProbeEnv:
+    """Test environment variable probe."""
+
+    def test_finds_existing_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-1234567890")
+        result = _probe_env("OPENAI_API_KEY")
+        assert result is not None
+        assert result.method == "env"
+        assert result.available is True
+        assert result.confidence == "high"
+
+    def test_returns_none_when_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        result = _probe_env("OPENAI_API_KEY")
+        assert result is None
+
+    def test_returns_none_for_short_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk")
+        result = _probe_env("OPENAI_API_KEY")
+        assert result is None
+
+
+class TestProbeShellProfile:
+    """Test shell profile scanning."""
+
+    def test_finds_export_in_profile(self, tmp_path) -> None:
+        zshrc = tmp_path / ".zshrc"
+        zshrc.write_text('export OPENAI_API_KEY="sk-test-1234567890"\n')
+        result = _probe_shell_profile("OPENAI_API_KEY", search_paths=[zshrc])
+        assert result is not None
+        assert result.method == "shell_profile"
+        assert result.available is True
+        assert str(zshrc) in result.metadata.get("profile", "")
+
+    def test_finds_aws_secretsmanager_pattern(self, tmp_path) -> None:
+        zshrc = tmp_path / ".zshrc"
+        zshrc.write_text(
+            'export OPENAI_API_KEY="$(aws secretsmanager get-secret-value '
+            '--secret-id MY_KEY --query SecretString --output text)"\n'
+        )
+        result = _probe_shell_profile("OPENAI_API_KEY", search_paths=[zshrc])
+        assert result is not None
+        assert "aws" in result.resolve_command.lower()
+
+    def test_returns_none_when_not_found(self, tmp_path) -> None:
+        zshrc = tmp_path / ".zshrc"
+        zshrc.write_text("# nothing here\n")
+        result = _probe_shell_profile("OPENAI_API_KEY", search_paths=[zshrc])
+        assert result is None
+
+
+class TestProbeAws:
+    """Test AWS Secrets Manager probe."""
+
+    @patch("shutil.which", return_value="/usr/local/bin/aws")
+    @patch("subprocess.run")
+    def test_detects_aws_cli_and_finds_secret(self, mock_run: MagicMock, _mock_which: MagicMock) -> None:
+        identity_result = MagicMock(returncode=0, stdout='{"Account": "123456"}')
+        list_result = MagicMock(
+            returncode=0,
+            stdout='{"SecretList": [{"Name": "my-openai-key", "ARN": "arn:aws:..."}]}',
+        )
+        mock_run.side_effect = [identity_result, list_result]
+        result = _probe_aws("OPENAI_API_KEY", "openai")
+        assert result is not None
+        assert result.method == "aws_secretsmanager"
+        assert result.available is True
+        assert "my-openai-key" in result.resolve_command
+
+    @patch("shutil.which", return_value=None)
+    def test_returns_none_without_aws_cli(self, _mock_which: MagicMock) -> None:
+        result = _probe_aws("OPENAI_API_KEY", "openai")
+        assert result is None
+
+
+class TestProbe1Password:
+    """Test 1Password CLI probe."""
+
+    @patch("shutil.which", return_value="/usr/local/bin/op")
+    @patch("subprocess.run")
+    def test_detects_op_cli(self, mock_run: MagicMock, _mock_which: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout='[{"shorthand": "my"}]')
+        result = _probe_1password("OPENAI_API_KEY", "openai")
+        assert result is not None
+        assert result.method == "1password"
+
+    @patch("shutil.which", return_value=None)
+    def test_returns_none_without_op_cli(self, _mock_which: MagicMock) -> None:
+        result = _probe_1password("OPENAI_API_KEY", "openai")
+        assert result is None
+
+
+class TestProbeKeychain:
+    """Test macOS Keychain probe."""
+
+    @patch("shutil.which", return_value="/usr/bin/security")
+    @patch("subprocess.run")
+    def test_finds_existing_keychain_entry(self, mock_run: MagicMock, _mock_which: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="sk-test-key")
+        result = _probe_keychain("cardiologist")
+        assert result is not None
+        assert result.method == "keychain"
+        assert result.confidence == "high"
+
+    @patch("shutil.which", return_value="/usr/bin/security")
+    @patch("subprocess.run")
+    def test_offers_keychain_store_when_no_entry(self, mock_run: MagicMock, _mock_which: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=44, stdout="", stderr="not found")
+        result = _probe_keychain("cardiologist")
+        assert result is not None
+        assert result.confidence == "low"
+        assert "store" in result.description.lower() or "no existing" in result.description.lower()
+
+    @patch("shutil.which", return_value=None)
+    def test_returns_none_on_non_macos(self, _mock_which: MagicMock) -> None:
+        result = _probe_keychain("cardiologist")
+        assert result is None

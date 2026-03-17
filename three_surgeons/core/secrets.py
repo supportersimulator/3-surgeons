@@ -7,8 +7,19 @@ interactive options to the user.
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
+import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+_SUBPROCESS_TIMEOUT = 10  # seconds
 
 # All API providers and their standard env var names
 PROVIDER_KEY_MAP: Dict[str, str] = {
@@ -75,3 +86,187 @@ class RemediationPlan:
             "local_alternatives": self.local_alternatives,
             "skip_option": self.skip_option,
         }
+
+
+# ---------------------------------------------------------------------------
+# Detection probes
+# ---------------------------------------------------------------------------
+
+
+def _probe_env(key_name: str) -> Optional[SecretSource]:
+    """Check if the key exists in the current environment."""
+    value = os.environ.get(key_name)
+    if value and len(value) >= 6:
+        return SecretSource(
+            method="env",
+            available=True,
+            description=f"{key_name} found in environment",
+            resolve_command="",
+            confidence="high",
+            metadata={"key_name": key_name},
+        )
+    return None
+
+
+def _probe_shell_profile(
+    key_name: str,
+    search_paths: Optional[List[Path]] = None,
+) -> Optional[SecretSource]:
+    """Scan shell profiles for an export of the given key."""
+    if search_paths is None:
+        home = Path.home()
+        search_paths = [
+            home / ".zshrc",
+            home / ".bashrc",
+            home / ".bash_profile",
+            home / ".zprofile",
+            home / ".zshenv",
+        ]
+
+    for profile_path in search_paths:
+        if not profile_path.is_file():
+            continue
+        try:
+            content = profile_path.read_text()
+        except OSError:
+            continue
+        pattern = rf"^export\s+{re.escape(key_name)}=(.+)$"
+        match = re.search(pattern, content, re.MULTILINE)
+        if not match:
+            continue
+        export_line = match.group(0).strip()
+        value_part = match.group(1).strip().strip('"').strip("'")
+
+        if "$(" in value_part or "`" in value_part:
+            return SecretSource(
+                method="shell_profile",
+                available=True,
+                description=f"Found {key_name} export in {profile_path.name} (uses command substitution)",
+                resolve_command=export_line,
+                confidence="high",
+                metadata={"profile": str(profile_path), "line": export_line, "uses_command": True},
+            )
+        else:
+            return SecretSource(
+                method="shell_profile",
+                available=True,
+                description=f"Found {key_name} export in {profile_path.name}",
+                resolve_command=export_line,
+                confidence="high",
+                metadata={"profile": str(profile_path), "line": export_line, "uses_command": False},
+            )
+    return None
+
+
+def _probe_aws(key_name: str, provider: str) -> Optional[SecretSource]:
+    """Check for AWS Secrets Manager access and matching secrets."""
+    if not shutil.which("aws"):
+        return None
+    try:
+        auth_check = subprocess.run(
+            ["aws", "sts", "get-caller-identity"],
+            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
+        )
+        if auth_check.returncode != 0:
+            return None
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+    try:
+        list_result = subprocess.run(
+            [
+                "aws", "secretsmanager", "list-secrets",
+                "--filter", f"Key=name,Values={provider}",
+            ],
+            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
+        )
+        if list_result.returncode != 0:
+            return SecretSource(
+                method="aws_secretsmanager",
+                available=True,
+                description=f"AWS CLI authenticated (no '{provider}' secrets found — specify secret ID manually)",
+                resolve_command="aws secretsmanager get-secret-value --secret-id YOUR_SECRET_ID --query SecretString --output text",
+                confidence="medium",
+                metadata={"aws_authenticated": True, "secrets_found": []},
+            )
+        data = json.loads(list_result.stdout)
+        secrets = data.get("SecretList", [])
+        if not secrets:
+            return SecretSource(
+                method="aws_secretsmanager",
+                available=True,
+                description=f"AWS CLI authenticated (no '{provider}' secrets found — specify secret ID manually)",
+                resolve_command="aws secretsmanager get-secret-value --secret-id YOUR_SECRET_ID --query SecretString --output text",
+                confidence="medium",
+                metadata={"aws_authenticated": True, "secrets_found": []},
+            )
+        secret_name = secrets[0]["Name"]
+        return SecretSource(
+            method="aws_secretsmanager",
+            available=True,
+            description=f"AWS Secrets Manager — found '{secret_name}'",
+            resolve_command=f"aws secretsmanager get-secret-value --secret-id {secret_name} --query SecretString --output text",
+            confidence="high",
+            metadata={
+                "aws_authenticated": True,
+                "secret_id": secret_name,
+                "secrets_found": [s["Name"] for s in secrets],
+            },
+        )
+    except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError):
+        return None
+
+
+def _probe_1password(key_name: str, provider: str) -> Optional[SecretSource]:
+    """Check for 1Password CLI access."""
+    if not shutil.which("op"):
+        return None
+    try:
+        account_check = subprocess.run(
+            ["op", "account", "list", "--format=json"],
+            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
+        )
+        if account_check.returncode != 0:
+            return None
+        return SecretSource(
+            method="1password",
+            available=True,
+            description="1Password CLI detected and authenticated",
+            resolve_command=f'op item get "{provider}" --fields credential --format json',
+            confidence="medium",
+            metadata={"provider": provider},
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _probe_keychain(surgeon_name: str) -> Optional[SecretSource]:
+    """Check macOS Keychain for stored key."""
+    if not shutil.which("security"):
+        return None
+    service_name = f"3surgeons-{surgeon_name}"
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", service_name, "-w"],
+            capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return SecretSource(
+                method="keychain",
+                available=True,
+                description=f"Found key in macOS Keychain (service: {service_name})",
+                resolve_command=f"security find-generic-password -s {service_name} -w",
+                confidence="high",
+                metadata={"service": service_name, "exists": True},
+            )
+        else:
+            return SecretSource(
+                method="keychain",
+                available=True,
+                description=f"macOS Keychain available — no existing entry for {service_name}",
+                resolve_command=f"security add-generic-password -s {service_name} -a 3surgeons -w YOUR_API_KEY",
+                confidence="low",
+                metadata={"service": service_name, "exists": False},
+            )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
