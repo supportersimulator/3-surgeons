@@ -40,11 +40,15 @@ class LiveSession:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
-    @property
-    def max_iterations(self) -> int:
-        return _MODE_MAX_ITERS.get(self.mode, 1)
+    max_iterations: int = 0
+
+    def __post_init__(self) -> None:
+        if self.max_iterations == 0:
+            self.max_iterations = _MODE_MAX_ITERS.get(self.mode, 1)
 
     def advance_phase(self, phase: str) -> None:
+        if phase not in _PHASE_ORDER:
+            raise ValueError(f"Invalid phase {phase!r}, must be one of {_PHASE_ORDER}")
         self.current_phase = phase
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
@@ -117,6 +121,7 @@ class LiveSession:
             file_context=d.get("file_context", ""),
             current_phase=d.get("current_phase", "created"),
             current_iteration=d.get("current_iteration", 1),
+            max_iterations=d.get("max_iterations", 0),
             accumulated_findings=d.get("accumulated_findings", []),
             consensus_scores=d.get("consensus_scores", []),
             total_cost=d.get("total_cost", 0.0),
@@ -186,6 +191,6 @@ class SessionManager:
                 if created < cutoff:
                     path.unlink()
                     removed += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Skipping unparseable session file %s: %s", path, exc)
         return removed
