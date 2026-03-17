@@ -1,11 +1,16 @@
 """Tests for the --live flag on the cross-exam CLI command."""
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner
 
 from three_surgeons.cli.main import cli
+
+# Resolve the *module* object for patch.object() — avoids Python 3.10
+# shadowing where "three_surgeons.cli.main" resolves to the function.
+_cli_main_mod = sys.modules["three_surgeons.cli.main"]
 
 
 class TestCrossExamLiveFlag:
@@ -25,10 +30,10 @@ class TestCrossExamLiveFlag:
         assert "--files" in result.output
         assert "--dry-run" in result.output
 
-    @patch("three_surgeons.cli.main.create_backend_from_config")
-    @patch("three_surgeons.cli.main._make_neuro")
-    @patch("three_surgeons.cli.main.EvidenceStore")
-    @patch("three_surgeons.cli.main.LLMProvider")
+    @patch.object(_cli_main_mod, "create_backend_from_config")
+    @patch.object(_cli_main_mod, "_make_neuro")
+    @patch.object(_cli_main_mod, "EvidenceStore")
+    @patch.object(_cli_main_mod, "LLMProvider")
     @patch("three_surgeons.core.cross_exam.SurgeryTeam")
     @patch("three_surgeons.core.sessions.SessionManager")
     def test_live_runs_phased_approach(
@@ -75,7 +80,7 @@ class TestCrossExamLiveFlag:
         mock_team_cls.return_value = mock_team
 
         runner = CliRunner()
-        with patch("three_surgeons.cli.main.Config") as mock_config_cls:
+        with patch.object(_cli_main_mod, "Config") as mock_config_cls:
             mock_config = MagicMock()
             mock_config.review.depth = "single"
             mock_config_cls.load.return_value = mock_config
@@ -104,10 +109,10 @@ class TestCrossExamLiveFlag:
         # Verify session cleanup
         mock_sessions.delete.assert_called_once_with("test-123")
 
-    @patch("three_surgeons.cli.main.create_backend_from_config")
-    @patch("three_surgeons.cli.main._make_neuro")
-    @patch("three_surgeons.cli.main.EvidenceStore")
-    @patch("three_surgeons.cli.main.LLMProvider")
+    @patch.object(_cli_main_mod, "create_backend_from_config")
+    @patch.object(_cli_main_mod, "_make_neuro")
+    @patch.object(_cli_main_mod, "EvidenceStore")
+    @patch.object(_cli_main_mod, "LLMProvider")
     @patch("three_surgeons.core.cross_exam.SurgeryTeam")
     def test_without_live_uses_iterative(
         self,

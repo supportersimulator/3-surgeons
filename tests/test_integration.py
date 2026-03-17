@@ -649,9 +649,12 @@ class TestReviewLoopIntegration:
             ok=True, content="Mock analysis", latency_ms=10, model="mock"
         )
 
+        import sys
+        _cli_main_mod = sys.modules["three_surgeons.cli.main"]
+
         runner = CliRunner()
-        with patch("three_surgeons.cli.main.LLMProvider") as mock_cls, \
-             patch("three_surgeons.cli.main._make_neuro") as mock_neuro:
+        with patch.object(_cli_main_mod, "LLMProvider") as mock_cls, \
+             patch.object(_cli_main_mod, "_make_neuro") as mock_neuro:
             mock_cls.return_value.query.return_value = mock_resp
             mock_neuro.return_value.query.return_value = mock_resp
             result = runner.invoke(

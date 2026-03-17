@@ -1,12 +1,18 @@
 """Tests for CLI command registration and _run_command helper."""
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
 from three_surgeons.cli.main import cli
+
+# Resolve the *module* object (not the function) for patch.object().
+# On Python 3.10, "three_surgeons.cli.main" as a string resolves to the
+# main *function* re-exported by __init__.py, breaking @patch() decorators.
+_cli_main_mod = sys.modules["three_surgeons.cli.main"]
 
 
 class TestCliCommandsRegistered:
@@ -27,8 +33,8 @@ class TestCliCommandsRegistered:
 class TestRunCommand:
     """Test _run_command helper handles gate results correctly."""
 
-    @patch("three_surgeons.cli.main.build_runtime_context")
-    @patch("three_surgeons.cli.main.check_requirements")
+    @patch.object(_cli_main_mod, "build_runtime_context")
+    @patch.object(_cli_main_mod, "check_requirements")
     def test_blocked_exits_with_error(self, mock_check, mock_build):
         from three_surgeons.core.requirements import GateResult
         mock_build.return_value = MagicMock()
@@ -38,8 +44,8 @@ class TestRunCommand:
         result = runner.invoke(cli, ["status"])
         assert result.exit_code != 0
 
-    @patch("three_surgeons.cli.main.build_runtime_context")
-    @patch("three_surgeons.cli.main.check_requirements")
+    @patch.object(_cli_main_mod, "build_runtime_context")
+    @patch.object(_cli_main_mod, "check_requirements")
     @patch("three_surgeons.core.status_commands.cmd_status")
     def test_proceed_outputs_yaml(self, mock_cmd, mock_check, mock_build):
         from three_surgeons.core.requirements import GateResult, CommandResult
@@ -54,8 +60,8 @@ class TestRunCommand:
         assert result.exit_code == 0
         assert "success: true" in result.output or "success:" in result.output
 
-    @patch("three_surgeons.cli.main.build_runtime_context")
-    @patch("three_surgeons.cli.main.check_requirements")
+    @patch.object(_cli_main_mod, "build_runtime_context")
+    @patch.object(_cli_main_mod, "check_requirements")
     @patch("three_surgeons.core.status_commands.cmd_status")
     def test_degraded_includes_notes(self, mock_cmd, mock_check, mock_build):
         from three_surgeons.core.requirements import GateResult, CommandResult

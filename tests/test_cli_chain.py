@@ -1,12 +1,17 @@
 """Tests for the `chain` CLI subcommand group."""
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
 
 from three_surgeons.cli.main import cli
+
+# Resolve the *module* object for patch.object() — avoids Python 3.10
+# shadowing where "three_surgeons.cli.main" resolves to the function.
+_cli_main_mod = sys.modules["three_surgeons.cli.main"]
 
 
 @pytest.fixture
@@ -30,7 +35,7 @@ def test_chain_presets_lists_all(runner):
     assert "evidence-dive" in result.output
 
 
-@patch("three_surgeons.cli.main.build_runtime_context")
+@patch.object(_cli_main_mod, "build_runtime_context")
 def test_chain_run_lightweight(mock_build_ctx, runner):
     """chain run executes without error on lightweight mode."""
     from three_surgeons.core.state import MemoryBackend
