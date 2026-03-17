@@ -312,6 +312,87 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
         click.echo("\nAll surgeons operational.")
 
 
+# -- bridge-status ----------------------------------------------------------
+
+
+@cli.command("bridge-status")
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def bridge_status_cmd(ctx: click.Context, as_json: bool) -> None:
+    """Diagnostic: show surgery bridge routing, version, and call counters.
+
+    Reports which execution path (direct import vs subprocess) is active,
+    plugin version compatibility, and cumulative call/fallback/error stats.
+    Designed for both human operators and programmatic health checks.
+    """
+    # Import bridge from the ecosystem (memory/ dir in superrepo)
+    # or provide a standalone fallback for users without the superrepo.
+    status: dict | None = None
+
+    try:
+        from memory.surgery_bridge import bridge_status  # type: ignore
+        status = bridge_status()
+    except ImportError:
+        # Standalone mode: report what we can from this side
+        import shutil as _shutil
+        cli_path = _shutil.which("3s")
+        try:
+            import importlib.metadata
+            ver = importlib.metadata.version("three-surgeons")
+        except Exception:
+            ver = None
+
+        status = {
+            "mode": "(bridge not installed — standalone plugin)",
+            "effective_route": "direct (plugin-native)",
+            "direct_import_available": True,
+            "cli_available": cli_path is not None,
+            "cli_path": cli_path,
+            "plugin_version": ver,
+            "expected_version": ver,
+            "version_compatible": True,
+            "version_detail": "standalone — no bridge version check needed",
+            "counters": {"note": "counters available only via bridge"},
+        }
+
+    if as_json:
+        click.echo(json.dumps(status, indent=2, default=str))
+        return
+
+    # Human-readable output
+    click.echo("Surgery Bridge Status")
+    click.echo("=" * 40)
+    click.echo(f"  Mode:            {status['mode']}")
+    click.echo(f"  Effective route: {status['effective_route']}")
+    click.echo(f"  Direct import:   {'yes' if status['direct_import_available'] else 'no'}")
+    cli_info = status.get('cli_path') or 'not found'
+    click.echo(f"  3s CLI:          {'yes' if status.get('cli_available') else 'no'} ({cli_info})")
+
+    click.echo()
+    pv = status.get('plugin_version') or 'unknown'
+    click.echo(f"  Plugin version:  {pv}")
+    vc = status.get('version_compatible')
+    if vc is True:
+        click.echo(f"  Version check:   OK")
+    elif vc is False:
+        click.echo(f"  Version check:   MISMATCH — {status.get('version_detail', '')}")
+    else:
+        click.echo(f"  Version check:   skipped (version not detectable)")
+
+    counters = status.get("counters", {})
+    if counters and counters.get("note") is None:
+        click.echo()
+        click.echo("  Counters (this process):")
+        click.echo(f"    Direct calls:    {counters.get('direct_calls', 0)}")
+        click.echo(f"    Subprocess calls:{counters.get('subprocess_calls', 0)}")
+        click.echo(f"    Fallbacks:       {counters.get('fallbacks', 0)}")
+        click.echo(f"    Errors:          {counters.get('errors', 0)}")
+
+    # Exit 1 if version mismatch
+    if vc is False:
+        ctx.exit(1)
+
+
 # -- setup-check ------------------------------------------------------------
 
 

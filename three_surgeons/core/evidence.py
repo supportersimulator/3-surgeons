@@ -605,11 +605,32 @@ class EvidenceStore:
         return weights
 
     def export_review_outcomes(self) -> List[Dict[str, Any]]:
-        """Export all review outcomes for cross-machine sharing."""
-        return self.get_review_outcomes(limit=10000)
+        """Export sanitized review outcomes for cross-machine sharing.
+
+        Strips project-specific fields (topic, id) to prevent data leakage.
+        Only statistical fields needed for weight computation are exported.
+        """
+        raw = self.get_review_outcomes(limit=10000)
+        return [
+            {
+                "mode_used": r["mode_used"],
+                "iteration_count": r["iteration_count"],
+                "consensus_reached": r["consensus_reached"],
+                "consensus_score": r["consensus_score"],
+                "files_changed": r["files_changed"],
+                "escalation_needed": r["escalation_needed"],
+                "user_override": r["user_override"],
+                "created_at": r["created_at"],
+            }
+            for r in raw
+        ]
 
     def import_review_outcomes(self, data: List[Dict[str, Any]]) -> int:
-        """Import review outcomes from another machine. Returns count imported."""
+        """Import review outcomes from another machine. Returns count imported.
+
+        Accepts both sanitized exports (no topic) and legacy exports (with topic).
+        Sanitized imports use '(imported)' as the topic placeholder.
+        """
         count = 0
         with self._connect() as conn:
             for item in data:
@@ -619,7 +640,8 @@ class EvidenceStore:
                     "consensus_score, files_changed, escalation_needed, "
                     "user_override, created_at) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (item["topic"], item["mode_used"], item["iteration_count"],
+                    (item.get("topic", "(imported)"),
+                     item["mode_used"], item["iteration_count"],
                      int(item["consensus_reached"]), item["consensus_score"],
                      item.get("files_changed", 0), int(item.get("escalation_needed", False)),
                      item.get("user_override"), item["created_at"]),

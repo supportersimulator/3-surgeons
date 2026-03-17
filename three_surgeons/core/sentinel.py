@@ -162,6 +162,16 @@ DEFAULT_VECTORS: List[ComplexityVector] = [
         keywords=["sqlite", "connection", "lock", "concurrent", "wal"],
         category="resource", risk_score=0.7,
     ),
+    ComplexityVector(
+        id="CV-DTP", name="Duplicate tool paths",
+        keywords=["duplicate", "mcp", "plugin", "double", "tool", "registration"],
+        category="structural", risk_score=0.6,
+    ),
+    ComplexityVector(
+        id="CV-PMD", name="Plugin migration drift",
+        keywords=["migration", "subprocess", "fallback", "bridge", "deprecated", "legacy path"],
+        category="operational", risk_score=0.65,
+    ),
 ]
 
 
