@@ -776,7 +776,7 @@ class SurgeryTeam:
                     topic=topic, other_analysis=neuro_initial,
                 ),
             )
-        elif not neuro_initial:
+        else:
             warnings.append("No neurologist findings to cross-review.")
 
         # Neurologist reviews cardiologist's analysis
@@ -789,7 +789,7 @@ class SurgeryTeam:
                     topic=topic, other_analysis=cardio_initial,
                 ),
             )
-        elif not cardio_initial:
+        else:
             warnings.append("No cardiologist findings to cross-review.")
 
         if cardio_resp is None and neuro_resp is None and (cardio_initial or neuro_initial):
@@ -957,9 +957,9 @@ class SurgeryTeam:
             ),
         )
 
-        # Consensus via both surgeons
+        # Consensus via both surgeons (use original topic, not enriched)
         consensus_result = self.consensus(
-            f"The analysis of '{topic}' is complete and all issues addressed."
+            f"The analysis of '{session.original_topic}' is complete and all issues addressed."
         )
         score = consensus_result.weighted_score
         session.add_consensus_score(score)
@@ -1031,12 +1031,12 @@ class SurgeryTeam:
 
         prior_context = "\n".join(prior_parts)
         enriched_topic = (
-            f"{session.topic}\n\n"
+            f"{session.original_topic}\n\n"
             f"=== Prior findings (iteration {session.current_iteration}/{session.max_iterations}) ===\n"
             f"{prior_context}"
         )
 
-        # Store enriched topic for next phase_start to pick up
+        # Store enriched topic for next phase_start to pick up (original preserved)
         session.topic = enriched_topic
         session.updated_at = datetime.now(timezone.utc).isoformat()
 

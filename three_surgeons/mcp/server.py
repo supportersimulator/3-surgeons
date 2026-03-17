@@ -202,7 +202,14 @@ def _probe() -> dict:
             }
 
     results["atlas"] = {"status": "ok", "note": "always available (this session)"}
-    return results
+    active = sum(1 for v in results.values() if v.get("status") == "ok")
+    return {
+        "operation": "probe",
+        **results,
+        "team_status": "ALL UP" if active == 3 else "DEGRADED",
+        "active_count": active,
+        "warnings": [],
+    }
 
 
 def _cross_examine(topic: str, depth: str = "full", mode: str = "single", file_paths: Optional[list] = None) -> dict:
@@ -238,11 +245,26 @@ def _consult(topic: str, file_paths: Optional[list] = None) -> dict:
     team = _build_surgery_team()
     result = team.consult(topic, file_paths=file_paths)
     return {
+        "operation": "consult",
         "topic": result.topic,
+        "cardiologist": {
+            "response": result.cardiologist_report,
+            "cost_usd": getattr(result, "cardiologist_cost", result.total_cost / 2),
+            "latency_ms": getattr(result, "cardiologist_latency_ms", result.total_latency_ms // 2),
+            "status": "ok" if result.cardiologist_report else "unavailable",
+        },
+        "neurologist": {
+            "response": result.neurologist_report,
+            "cost_usd": 0.0,
+            "latency_ms": getattr(result, "neurologist_latency_ms", result.total_latency_ms // 2),
+            "status": "ok" if result.neurologist_report else "unavailable",
+        },
+        "summary": result.cardiologist_report[:200] if result.cardiologist_report else "",
         "cardiologist_report": result.cardiologist_report,
         "neurologist_report": result.neurologist_report,
         "total_cost": result.total_cost,
         "total_latency_ms": result.total_latency_ms,
+        "warnings": [],
     }
 
 
@@ -251,13 +273,25 @@ def _consensus(claim: str) -> dict:
     team = _build_surgery_team()
     result = team.consensus(claim)
     return {
+        "operation": "consensus",
         "claim": result.claim,
+        "cardiologist": {
+            "confidence": result.cardiologist_confidence,
+            "assessment": result.cardiologist_assessment,
+            "status": "ok" if result.cardiologist_confidence > 0 else "unavailable",
+        },
+        "neurologist": {
+            "confidence": result.neurologist_confidence,
+            "assessment": result.neurologist_assessment,
+            "status": "ok" if result.neurologist_confidence > 0 else "unavailable",
+        },
         "cardiologist_confidence": result.cardiologist_confidence,
         "cardiologist_assessment": result.cardiologist_assessment,
         "neurologist_confidence": result.neurologist_confidence,
         "neurologist_assessment": result.neurologist_assessment,
         "weighted_score": result.weighted_score,
         "total_cost": result.total_cost,
+        "warnings": [],
     }
 
 
@@ -266,12 +300,15 @@ def _sentinel_run(content: str) -> dict:
     sentinel = Sentinel()
     result = sentinel.run_cycle(content)
     return {
+        "operation": "sentinel_run",
+        "_surgeon": "atlas",
         "vectors_checked": result.vectors_checked,
         "vectors_triggered": result.vectors_triggered,
         "risk_level": result.risk_level,
         "overall_score": result.overall_score,
         "triggered_vectors": result.triggered_vectors,
         "recommendations": result.recommendations,
+        "warnings": [],
     }
 
 
@@ -283,6 +320,8 @@ def _gains_gate() -> dict:
     gate = GainsGate(state=state, evidence=evidence, config=config)
     result = gate.run()
     return {
+        "operation": "gains_gate",
+        "_surgeon": "atlas",
         "passed": result.passed,
         "summary": result.summary,
         "duration_ms": result.duration_ms,
@@ -295,6 +334,7 @@ def _gains_gate() -> dict:
             }
             for c in result.checks
         ],
+        "warnings": [],
     }
 
 
@@ -310,9 +350,13 @@ def _ab_propose(
             variant_b=variant_b,
             hypothesis=hypothesis,
         )
-        return test.to_dict()
+        result = test.to_dict()
+        result["operation"] = "ab_propose"
+        result["_surgeon"] = "atlas"
+        result["warnings"] = []
+        return result
     except ValueError as exc:
-        return {"error": str(exc)}
+        return {"error": str(exc), "operation": "ab_propose", "_surgeon": "atlas"}
 
 
 def _ab_start(test_id: str) -> dict:
@@ -320,18 +364,24 @@ def _ab_start(test_id: str) -> dict:
     engine = _build_ab_engine()
     try:
         test = engine.start_grace_period(test_id)
-        return test.to_dict()
+        result = test.to_dict()
+        result.update({"operation": "ab_start", "_surgeon": "atlas", "warnings": []})
+        return result
     except (KeyError, ValueError) as exc:
-        return {"error": str(exc)}
+        return {"operation": "ab_start", "_surgeon": "atlas", "error": str(exc), "warnings": []}
 
 
 def _ab_measure(test_id: str, metric_a: float, metric_b: float) -> dict:
     """Record A/B test measurement."""
     engine = _build_ab_engine()
     try:
-        return engine.measure(test_id, metric_a=metric_a, metric_b=metric_b)
+        result = engine.measure(test_id, metric_a=metric_a, metric_b=metric_b)
+        if isinstance(result, dict):
+            result.update({"operation": "ab_measure", "_surgeon": "atlas", "warnings": []})
+            return result
+        return {"operation": "ab_measure", "_surgeon": "atlas", "result": result, "warnings": []}
     except (KeyError, ValueError) as exc:
-        return {"error": str(exc)}
+        return {"operation": "ab_measure", "_surgeon": "atlas", "error": str(exc), "warnings": []}
 
 
 def _ab_conclude(test_id: str, verdict: str) -> dict:
@@ -339,9 +389,11 @@ def _ab_conclude(test_id: str, verdict: str) -> dict:
     engine = _build_ab_engine()
     try:
         test = engine.conclude(test_id, verdict)
-        return test.to_dict()
+        result = test.to_dict()
+        result.update({"operation": "ab_conclude", "_surgeon": "atlas", "warnings": []})
+        return result
     except (KeyError, ValueError) as exc:
-        return {"error": str(exc)}
+        return {"operation": "ab_conclude", "_surgeon": "atlas", "error": str(exc), "warnings": []}
 
 
 def _neurologist_pulse_impl() -> dict:
@@ -355,12 +407,15 @@ def _neurologist_pulse_impl() -> dict:
         gpu_lock_path=config.gpu_lock_path,
     )
     return {
+        "operation": "neurologist_pulse",
+        "_surgeon": "neurologist",
         "healthy": result.healthy,
         "summary": result.summary,
         "checks": {
             name: {"ok": c.ok, "detail": c.detail, "latency_ms": c.latency_ms}
             for name, c in result.checks.items()
         },
+        "warnings": [],
     }
 
 
@@ -377,24 +432,38 @@ def _neurologist_challenge_impl(topic: str, file_paths: Optional[list] = None, r
             topic, neuro, evidence_store=evidence,
             file_paths=file_paths, rounds=min(rounds, 3),
         )
+        challenges_list = [
+            {"claim": c.claim, "challenge": c.challenge,
+             "severity": c.severity, "suggested_test": c.suggested_test}
+            for c in result.challenges
+        ]
         return {
+            "operation": "neurologist_challenge",
             "topic": result.topic,
-            "challenges": [
-                {"claim": c.claim, "challenge": c.challenge,
-                 "severity": c.severity, "suggested_test": c.suggested_test}
-                for c in result.challenges
-            ],
+            "neurologist": {
+                "challenges": challenges_list,
+                "status": "ok",
+            },
+            "challenges": challenges_list,
             "iteration_count": result.iteration_count,
+            "warnings": [],
         }
     else:
         result = neurologist_challenge(topic, neuro, evidence_store=evidence, file_paths=file_paths)
+        challenges_list = [
+            {"claim": c.claim, "challenge": c.challenge,
+             "severity": c.severity, "suggested_test": c.suggested_test}
+            for c in result.challenges
+        ]
         return {
+            "operation": "neurologist_challenge",
             "topic": result.topic,
-            "challenges": [
-                {"claim": c.claim, "challenge": c.challenge,
-                 "severity": c.severity, "suggested_test": c.suggested_test}
-                for c in result.challenges
-            ],
+            "neurologist": {
+                "challenges": challenges_list,
+                "status": "ok",
+            },
+            "challenges": challenges_list,
+            "warnings": [],
         }
 
 
@@ -402,16 +471,19 @@ def _introspect_impl() -> dict:
     """Ask each surgeon to self-report capabilities."""
     config = _build_config()
     providers = {}
+    warnings: list[str] = []
     try:
         providers["cardiologist"] = LLMProvider(config.cardiologist)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Cardiologist unavailable for introspect: %s", exc)
+        warnings.append(f"Cardiologist unavailable: {exc}")
     try:
         providers["neurologist"] = _get_neuro(config)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Neurologist unavailable for introspect: %s", exc)
+        warnings.append(f"Neurologist unavailable: {exc}")
     results = introspect(providers)
-    return {
+    surgeons = {
         name: {
             "model": r.model,
             "capabilities": r.capabilities,
@@ -421,6 +493,12 @@ def _introspect_impl() -> dict:
         }
         for name, r in results.items()
     }
+    return {
+        "operation": "introspect",
+        "surgeons": surgeons,
+        "warnings": warnings,
+        **surgeons,  # backward compat: keep top-level surgeon keys
+    }
 
 
 def _ask_local_impl(prompt: str) -> dict:
@@ -428,7 +506,7 @@ def _ask_local_impl(prompt: str) -> dict:
     config = _build_config()
     neuro = _get_neuro(config)
     resp = ask_local(prompt, neuro)
-    return {"ok": resp.ok, "content": resp.content}
+    return {"operation": "ask_local", "_surgeon": "neurologist", "ok": resp.ok, "content": resp.content, "warnings": []}
 
 
 def _ask_remote_impl(prompt: str) -> dict:
@@ -436,7 +514,7 @@ def _ask_remote_impl(prompt: str) -> dict:
     config = _build_config()
     cardio = LLMProvider(config.cardiologist)
     resp = ask_remote(prompt, cardio)
-    return {"ok": resp.ok, "content": resp.content, "cost_usd": resp.cost_usd}
+    return {"operation": "ask_remote", "_surgeon": "cardiologist", "ok": resp.ok, "content": resp.content, "cost_usd": resp.cost_usd, "warnings": []}
 
 
 def _cardio_review_impl(topic: str, git_context: Optional[str] = None, file_paths: Optional[list] = None) -> dict:
@@ -445,12 +523,22 @@ def _cardio_review_impl(topic: str, git_context: Optional[str] = None, file_path
     evidence = _build_evidence()
     result = cardio_review(topic, team, evidence_store=evidence, git_context=git_context, file_paths=file_paths)
     return {
+        "operation": "cardio_review",
         "topic": result.topic,
+        "cardiologist": {
+            "findings": result.cardiologist_findings,
+            "status": "ok" if result.cardiologist_findings else "unavailable",
+        },
+        "neurologist": {
+            "blind_spots": result.neurologist_blind_spots,
+            "status": "ok" if result.neurologist_blind_spots else "unavailable",
+        },
         "cardiologist_findings": result.cardiologist_findings,
         "neurologist_blind_spots": result.neurologist_blind_spots,
         "synthesis": result.synthesis,
         "dissent": result.dissent,
         "recommendations": result.recommendations,
+        "warnings": [],
     }
 
 
@@ -459,9 +547,11 @@ def _ab_validate_impl(description: str) -> dict:
     team = _build_surgery_team()
     result = ab_validate(description, team)
     return {
+        "operation": "ab_validate",
         "verdict": result.verdict,
         "reasoning": result.reasoning,
         "surgeon_votes": result.surgeon_votes,
+        "warnings": [],
     }
 
 
@@ -471,10 +561,13 @@ def _research_impl(topic: str) -> dict:
     cardio = LLMProvider(config.cardiologist)
     result = research_fn(topic, cardio)
     return {
+        "operation": "research",
+        "_surgeon": "cardiologist",
         "topic": result.topic,
         "findings": result.findings,
         "sources": result.sources,
         "cost_usd": result.cost_usd,
+        "warnings": [],
     }
 
 
