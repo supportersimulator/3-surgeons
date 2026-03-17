@@ -83,6 +83,11 @@ class TestMCPServerImport:
             "upgrade_probe",
             "upgrade_history",
             "capability_status",
+            "cross_examine_start",
+            "cross_examine_deepen",
+            "cross_examine_explore",
+            "cross_examine_synthesize",
+            "cross_examine_iterate",
         }
         for name in TOOL_NAMES:
             assert name in known, f"Unexpected tool: {name}"

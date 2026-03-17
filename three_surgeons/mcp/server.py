@@ -24,6 +24,7 @@ from three_surgeons.core.models import LLMProvider
 from three_surgeons.core.neurologist import introspect, neurologist_challenge, neurologist_pulse
 from three_surgeons.core.research import research as research_fn
 from three_surgeons.core.sentinel import Sentinel
+from three_surgeons.core.sessions import SessionManager
 from three_surgeons.core.state import MemoryBackend
 
 logger = logging.getLogger(__name__)
@@ -118,6 +119,11 @@ TOOL_NAMES: list[str] = [
     "upgrade_probe",
     "upgrade_history",
     "capability_status",
+    "cross_examine_start",
+    "cross_examine_deepen",
+    "cross_examine_explore",
+    "cross_examine_synthesize",
+    "cross_examine_iterate",
 ]
 
 # ── Dependency builders (thin, testable seams) ──────────────────────────
@@ -710,6 +716,67 @@ def _cap_chain_suggest(trigger: str = "") -> dict:
     return {"suggestion": None}
 
 
+# ── Stepwise cross-examination impl (return dicts) ───────────────────────
+
+
+def _impl_cross_examine_start(
+    topic: str,
+    mode: str = "iterative",
+    depth: str = "full",
+    file_paths: list | None = None,
+) -> dict:
+    sessions = SessionManager()
+    session = sessions.create(topic=topic, mode=mode, depth=depth, file_paths=file_paths or [])
+    team = _build_surgery_team()
+    result = team.phase_start(session)
+    sessions.save(session)
+    return result
+
+
+def _impl_cross_examine_deepen(session_id: str) -> dict:
+    sessions = SessionManager()
+    session = sessions.get(session_id)
+    if session is None:
+        return {"error": f"Session {session_id} not found or expired"}
+    team = _build_surgery_team()
+    result = team.phase_deepen(session)
+    sessions.save(session)
+    return result
+
+
+def _impl_cross_examine_explore(session_id: str) -> dict:
+    sessions = SessionManager()
+    session = sessions.get(session_id)
+    if session is None:
+        return {"error": f"Session {session_id} not found or expired"}
+    team = _build_surgery_team()
+    result = team.phase_explore(session)
+    sessions.save(session)
+    return result
+
+
+def _impl_cross_examine_synthesize(session_id: str) -> dict:
+    sessions = SessionManager()
+    session = sessions.get(session_id)
+    if session is None:
+        return {"error": f"Session {session_id} not found or expired"}
+    team = _build_surgery_team()
+    result = team.phase_synthesize(session)
+    sessions.save(session)
+    return result
+
+
+def _impl_cross_examine_iterate(session_id: str) -> dict:
+    sessions = SessionManager()
+    session = sessions.get(session_id)
+    if session is None:
+        return {"error": f"Session {session_id} not found or expired"}
+    team = _build_surgery_team()
+    result = team.phase_iterate(session)
+    sessions.save(session)
+    return result
+
+
 # ── FastMCP wiring (optional -- gracefully degrades) ────────────────────
 
 _mcp_app = None
@@ -833,6 +900,33 @@ try:
     ) -> dict:
         """Query per-capability levels and system posture."""
         return _capability_status(verbose=verbose, capability=capability)
+
+    # ── Stepwise cross-examination tools ─────────────────────────────
+
+    @_mcp_app.tool()
+    def cross_examine_start(topic: str, mode: str = "iterative", depth: str = "full", file_paths: list | None = None) -> dict:
+        """Start a live cross-examination. Both surgeons analyze independently. Returns session_id for subsequent calls. Use iterative/continuous mode for multi-round analysis."""
+        return _impl_cross_examine_start(topic, mode=mode, depth=depth, file_paths=file_paths)
+
+    @_mcp_app.tool()
+    def cross_examine_deepen(session_id: str) -> dict:
+        """Deepen: each surgeon cross-reviews the other's initial findings. Requires session_id from cross_examine_start."""
+        return _impl_cross_examine_deepen(session_id)
+
+    @_mcp_app.tool()
+    def cross_examine_explore(session_id: str) -> dict:
+        """Explore: open-ended search for unknown unknowns and blind spots. Requires session_id."""
+        return _impl_cross_examine_explore(session_id)
+
+    @_mcp_app.tool()
+    def cross_examine_synthesize(session_id: str) -> dict:
+        """Synthesize findings into consensus. Returns next_action (iterate/done). Requires session_id."""
+        return _impl_cross_examine_synthesize(session_id)
+
+    @_mcp_app.tool()
+    def cross_examine_iterate(session_id: str) -> dict:
+        """Start next iteration round with accumulated context. Only valid when synthesize returned next_action='iterate'."""
+        return _impl_cross_examine_iterate(session_id)
 
     # ── Phase 3: IDE Event Bus tools ───────────────────────────────────
 
