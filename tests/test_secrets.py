@@ -242,3 +242,18 @@ class TestDiagnoseAuth:
         d = plan.to_safe_dict()
         import json
         json.dumps(d)
+
+
+class TestProbeIntegration:
+    """Test that diagnose_auth returns remediation for auth failures."""
+
+    def test_remediation_on_missing_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When env var is missing, diagnose_auth returns options."""
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = Config()
+        plan = diagnose_auth("cardiologist", config)
+        assert plan.resolved is False
+        assert plan.key_name == "OPENAI_API_KEY"
+        d = plan.to_safe_dict()
+        assert d["key_name"] == "OPENAI_API_KEY"
+        assert d["status"] in ("options_available", "no_sources")

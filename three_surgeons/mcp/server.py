@@ -23,6 +23,7 @@ from three_surgeons.core.gates import GainsGate
 from three_surgeons.core.models import LLMProvider
 from three_surgeons.core.neurologist import introspect, neurologist_challenge, neurologist_pulse
 from three_surgeons.core.research import research as research_fn
+from three_surgeons.core.secrets import diagnose_auth
 from three_surgeons.core.sentinel import Sentinel
 from three_surgeons.core.sessions import SessionManager
 from three_surgeons.core.state import MemoryBackend
@@ -191,15 +192,31 @@ def _probe() -> dict:
                     "latency_ms": resp.latency_ms,
                 }
             else:
-                results[name] = {
+                entry: dict = {
                     "status": "fail",
                     "error": resp.content[:200],
                 }
+                error_lower = str(resp.content).lower()
+                if "401" in error_lower or "api key" in error_lower or "unauthorized" in error_lower:
+                    try:
+                        plan = diagnose_auth(name, config)
+                        entry["remediation"] = plan.to_safe_dict()
+                    except Exception:
+                        pass  # Don't let remediation detection break probe
+                results[name] = entry
         except Exception as exc:
-            results[name] = {
+            entry = {
                 "status": "unreachable",
                 "error": str(exc)[:200],
             }
+            error_lower = str(exc).lower()
+            if "401" in error_lower or "api key" in error_lower or "unauthorized" in error_lower:
+                try:
+                    plan = diagnose_auth(name, config)
+                    entry["remediation"] = plan.to_safe_dict()
+                except Exception:
+                    pass  # Don't let remediation detection break probe
+            results[name] = entry
 
     results["atlas"] = {"status": "ok", "note": "always available (this session)"}
     active = sum(1 for v in results.values() if v.get("status") == "ok")
