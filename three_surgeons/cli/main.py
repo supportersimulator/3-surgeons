@@ -640,6 +640,46 @@ def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, reve
 # -- cross-exam -------------------------------------------------------------
 
 
+def _print_phase_result(result: dict, phase: str) -> None:
+    """Print per-surgeon results for a live surgery phase."""
+    for surgeon in ("cardiologist", "neurologist"):
+        data = result.get(surgeon)
+        if data is None:
+            click.echo(f"  [{surgeon.upper()}] unavailable", err=True)
+            continue
+
+        click.echo(f"  [{surgeon.upper()}]")
+
+        # Findings
+        findings = data.get("findings", [])
+        for f in findings:
+            click.echo(f"    \u2022 {f}")
+
+        # Challenges (deepen phase)
+        challenges = data.get("challenges", [])
+        for c in challenges:
+            click.echo(f"    \u26a1 {c}")
+
+        # Confidence
+        confidence = data.get("confidence")
+        if confidence is not None:
+            click.echo(f"    confidence: {confidence:.2f}")
+
+        # Latency
+        latency = data.get("latency_ms")
+        if latency is not None:
+            click.echo(f"    latency: {latency:.0f}ms")
+
+    # Phase summary
+    summary = result.get("phase_summary")
+    if summary:
+        click.echo(f"\n  Summary: {summary}")
+
+    # Warnings
+    for w in result.get("warnings", []):
+        click.echo(f"  [WARNING] {w}", err=True)
+
+
 @cli.command("cross-exam")
 @click.argument("topic")
 @click.option(
@@ -651,8 +691,9 @@ def doctor(ctx: click.Context, json_mode: bool, probe: bool, history: bool, reve
 )
 @click.option("--files", "-f", multiple=True, help="File paths to include as context")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
+@click.option("--live", is_flag=True, help="Phased execution with real-time progress output")
 @click.pass_context
-def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str], files: tuple, dry_run: bool) -> None:
+def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str], files: tuple, dry_run: bool, live: bool) -> None:
     """Full cross-examination protocol."""
     if dry_run:
         from three_surgeons.core.dry_run import check_dry_run
@@ -677,6 +718,73 @@ def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str], files
     )
 
     file_paths = list(files) if files else None
+
+    if live:
+        from three_surgeons.core.sessions import SessionManager
+
+        sessions = SessionManager()
+        session = sessions.create(
+            topic=topic, mode=mode.value, depth="full", file_paths=file_paths or [],
+        )
+
+        click.echo("\u2550" * 48)
+        click.echo("  LIVE SURGERY \u2014 Cross-Examination")
+        click.echo(f'  Topic: "{topic}"')
+        click.echo(f"  Mode: {mode.value} (up to {mode.max_iterations} rounds)")
+        click.echo("\u2550" * 48)
+        click.echo()
+
+        iteration = 0
+        result = {}
+        for iteration in range(1, mode.max_iterations + 1):
+            if iteration > 1:
+                result = team.phase_iterate(session)
+                sessions.save(session)
+                click.echo(f"\n--- Round {iteration} ---\n")
+
+            # Phase 1: Start
+            click.echo("Phase 1: Independent Analysis...")
+            result = team.phase_start(session)
+            sessions.save(session)
+            _print_phase_result(result, "start")
+
+            # Phase 2: Deepen
+            click.echo("\nPhase 2: Cross-Review...")
+            result = team.phase_deepen(session)
+            sessions.save(session)
+            _print_phase_result(result, "deepen")
+
+            # Phase 3: Explore
+            click.echo("\nPhase 3: Open Exploration...")
+            result = team.phase_explore(session)
+            sessions.save(session)
+            _print_phase_result(result, "explore")
+
+            # Phase 4: Synthesize
+            click.echo("\nPhase 4: Synthesis...")
+            result = team.phase_synthesize(session)
+            sessions.save(session)
+            _print_phase_result(result, "synthesize")
+
+            # Check next action
+            next_action = result.get("next_action", "done")
+            if next_action == "done":
+                break
+
+        # Print consensus box
+        scores = result.get("consensus_scores", session.consensus_scores)
+        final_score = scores[-1] if scores else 0.0
+        click.echo()
+        click.echo("\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510")
+        click.echo(f"\u2502  CONSENSUS \u2014 Round {iteration:<15}\u2502")
+        click.echo(f"\u2502  Score: {final_score:.2f} / 0.70 threshold    \u2502")
+        click.echo(f"\u2502  Status: {'REACHED' if final_score >= 0.7 else 'NOT REACHED':<21}\u2502")
+        click.echo(f"\u2502  Cost: ${session.total_cost:.4f}               \u2502")
+        click.echo("\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518")
+
+        sessions.delete(session.session_id)  # Clean up after completion
+        return
+
     click.echo(f"Cross-examining ({mode.value} mode, max {mode.max_iterations} iterations): {topic}\n")
     result = team.cross_examine_iterative(topic, mode=mode, file_paths=file_paths)
 

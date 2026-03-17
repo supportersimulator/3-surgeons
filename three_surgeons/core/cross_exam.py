@@ -12,12 +12,14 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Protocol
 
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.file_access import AccessOutcome, FileAccessPolicy, read_files_with_budget, wrap_file_content
+from three_surgeons.core.sessions import LiveSession
 from three_surgeons.core.state import StateBackend
 
 logger = logging.getLogger(__name__)
@@ -620,6 +622,434 @@ class SurgeryTeam:
         result.weighted_score = self._calculate_weighted_score(result)
 
         return result
+
+    # ── Phased cross-examination (Live Surgery Transparency) ────────
+
+    def _phased_result(
+        self,
+        session: LiveSession,
+        phase: str,
+        cardio_data: dict,
+        neuro_data: dict,
+        phase_summary: str = "",
+        warnings: Optional[List[str]] = None,
+    ) -> dict:
+        """Build the standard phased result dict."""
+        return {
+            "session_id": session.session_id,
+            "phase": phase,
+            "iteration": session.current_iteration,
+            "cardiologist": cardio_data,
+            "neurologist": neuro_data,
+            "phase_summary": phase_summary,
+            "next_action": session.next_action(),
+            "warnings": warnings or [],
+        }
+
+    @staticmethod
+    def _surgeon_data(
+        resp: Optional[LLMResponseLike],
+        *,
+        fallback_findings: Optional[List[str]] = None,
+    ) -> dict:
+        """Extract structured surgeon data from an LLM response."""
+        if resp is None:
+            return {
+                "findings": fallback_findings or [],
+                "confidence": 0.0,
+                "cost_usd": 0.0,
+                "latency_ms": 0,
+                "status": "unavailable",
+            }
+        # Split content into findings (one per paragraph/line-group)
+        lines = [ln.strip() for ln in resp.content.split("\n") if ln.strip()]
+        return {
+            "findings": lines or [resp.content],
+            "confidence": 0.7,  # default; synthesize overrides with parsed value
+            "cost_usd": resp.cost_usd,
+            "latency_ms": resp.latency_ms,
+            "status": "ok",
+        }
+
+    def phase_start(self, session: LiveSession) -> dict:
+        """Phase 1: Both surgeons analyze independently.
+
+        Queries cardiologist and neurologist with the session topic.
+        Returns structured per-surgeon data. Advances session to 'start'.
+        """
+        session.advance_phase("start")
+        topic = session.topic
+        if session.file_context:
+            topic = f"{topic}\n\n{session.file_context}"
+
+        warnings: List[str] = []
+
+        cardio_resp = self._safe_query(
+            self._cardiologist,
+            system=_CONSULT_SYSTEM.format(role="cardiologist"),
+            prompt=topic,
+        )
+        neuro_resp = self._safe_query(
+            self._neurologist,
+            system=_CONSULT_SYSTEM.format(role="neurologist"),
+            prompt=topic,
+        )
+
+        # Both failed — error immediately
+        if cardio_resp is None and neuro_resp is None:
+            warnings.append("Both surgeons unreachable — cannot proceed.")
+            session.warnings.extend(warnings)
+            return self._phased_result(
+                session, "start",
+                self._surgeon_data(None), self._surgeon_data(None),
+                phase_summary="Both surgeons unavailable.",
+                warnings=warnings,
+            )
+
+        # Degradation warnings
+        if cardio_resp is None:
+            warnings.append("Cardiologist unreachable — proceeding with neurologist only.")
+        if neuro_resp is None:
+            warnings.append("Neurologist unreachable — proceeding with cardiologist only.")
+
+        # Track cost
+        cardio_data = self._surgeon_data(cardio_resp)
+        neuro_data = self._surgeon_data(neuro_resp)
+        if cardio_resp:
+            session.track_cost(cardio_resp.cost_usd)
+            self._track_cost("cardiologist", cardio_resp.cost_usd, "phase_start")
+        if neuro_resp:
+            session.track_cost(neuro_resp.cost_usd)
+            self._track_cost("neurologist", neuro_resp.cost_usd, "phase_start")
+
+        # Record findings
+        session.add_finding(
+            session.current_iteration, "start",
+            cardiologist=cardio_data["findings"],
+            neurologist=neuro_data["findings"],
+        )
+        session.warnings.extend(warnings)
+
+        summary = "Independent analyses complete."
+        if warnings:
+            summary += f" ({len(warnings)} warning(s))"
+
+        return self._phased_result(
+            session, "start", cardio_data, neuro_data,
+            phase_summary=summary, warnings=warnings,
+        )
+
+    def phase_deepen(self, session: LiveSession) -> dict:
+        """Phase 2: Each surgeon cross-reviews the other's initial analysis.
+
+        Reads the last 'start' findings from session to build cross-review prompts.
+        Advances session to 'deepen'.
+        """
+        session.advance_phase("deepen")
+        topic = session.topic
+        if session.file_context:
+            topic = f"{topic}\n\n{session.file_context}"
+
+        warnings: List[str] = []
+
+        # Get initial findings from session
+        start_findings = [
+            f for f in session.accumulated_findings
+            if f["phase"] == "start" and f["iteration"] == session.current_iteration
+        ]
+        cardio_initial = ""
+        neuro_initial = ""
+        if start_findings:
+            last = start_findings[-1]
+            if last.get("cardiologist"):
+                cardio_initial = "\n".join(last["cardiologist"]) if isinstance(last["cardiologist"], list) else str(last["cardiologist"])
+            if last.get("neurologist"):
+                neuro_initial = "\n".join(last["neurologist"]) if isinstance(last["neurologist"], list) else str(last["neurologist"])
+
+        # Cardiologist reviews neurologist's analysis
+        cardio_resp = None
+        if neuro_initial:
+            cardio_resp = self._safe_query(
+                self._cardiologist,
+                system=_CROSS_EXAM_REVIEW_SYSTEM.format(role="cardiologist"),
+                prompt=_CROSS_EXAM_REVIEW_PROMPT.format(
+                    topic=topic, other_analysis=neuro_initial,
+                ),
+            )
+        else:
+            warnings.append("No neurologist findings to cross-review.")
+
+        # Neurologist reviews cardiologist's analysis
+        neuro_resp = None
+        if cardio_initial:
+            neuro_resp = self._safe_query(
+                self._neurologist,
+                system=_CROSS_EXAM_REVIEW_SYSTEM.format(role="neurologist"),
+                prompt=_CROSS_EXAM_REVIEW_PROMPT.format(
+                    topic=topic, other_analysis=cardio_initial,
+                ),
+            )
+        else:
+            warnings.append("No cardiologist findings to cross-review.")
+
+        if cardio_resp is None and neuro_resp is None and (cardio_initial or neuro_initial):
+            warnings.append("Both surgeons failed cross-review queries.")
+
+        cardio_data = self._surgeon_data(cardio_resp)
+        neuro_data = self._surgeon_data(neuro_resp)
+
+        if cardio_resp:
+            session.track_cost(cardio_resp.cost_usd)
+            self._track_cost("cardiologist", cardio_resp.cost_usd, "phase_deepen")
+        if neuro_resp:
+            session.track_cost(neuro_resp.cost_usd)
+            self._track_cost("neurologist", neuro_resp.cost_usd, "phase_deepen")
+
+        session.add_finding(
+            session.current_iteration, "deepen",
+            cardiologist=cardio_data["findings"],
+            neurologist=neuro_data["findings"],
+        )
+        session.warnings.extend(warnings)
+
+        return self._phased_result(
+            session, "deepen", cardio_data, neuro_data,
+            phase_summary="Cross-review complete.",
+            warnings=warnings,
+        )
+
+    def phase_explore(self, session: LiveSession) -> dict:
+        """Phase 3: Open exploration — 'What are we ALL blind to?'
+
+        Both surgeons receive all prior analysis and surface unknown unknowns.
+        Advances session to 'explore'.
+        """
+        session.advance_phase("explore")
+        topic = session.topic
+        warnings: List[str] = []
+
+        # Build reports from accumulated findings for this iteration
+        iter_findings = [
+            f for f in session.accumulated_findings
+            if f["iteration"] == session.current_iteration
+        ]
+        cardio_parts: List[str] = []
+        neuro_parts: List[str] = []
+        for f in iter_findings:
+            if f.get("cardiologist"):
+                items = f["cardiologist"] if isinstance(f["cardiologist"], list) else [str(f["cardiologist"])]
+                cardio_parts.extend(items)
+            if f.get("neurologist"):
+                items = f["neurologist"] if isinstance(f["neurologist"], list) else [str(f["neurologist"])]
+                neuro_parts.extend(items)
+
+        cardio_report = "\n".join(cardio_parts) or "(no cardiologist findings)"
+        neuro_report = "\n".join(neuro_parts) or "(no neurologist findings)"
+
+        explore_prompt = _EXPLORATION_PROMPT.format(
+            topic=topic,
+            cardio_report=cardio_report,
+            neuro_report=neuro_report,
+        )
+
+        cardio_resp = self._safe_query(
+            self._cardiologist,
+            system=_EXPLORATION_SYSTEM,
+            prompt=explore_prompt,
+        )
+        neuro_resp = self._safe_query(
+            self._neurologist,
+            system=_EXPLORATION_SYSTEM,
+            prompt=explore_prompt,
+        )
+
+        if cardio_resp is None and neuro_resp is None:
+            warnings.append("Both surgeons unreachable during exploration.")
+        else:
+            if cardio_resp is None:
+                warnings.append("Cardiologist unreachable during exploration.")
+            if neuro_resp is None:
+                warnings.append("Neurologist unreachable during exploration.")
+
+        cardio_data = self._surgeon_data(cardio_resp)
+        neuro_data = self._surgeon_data(neuro_resp)
+
+        if cardio_resp:
+            session.track_cost(cardio_resp.cost_usd)
+            self._track_cost("cardiologist", cardio_resp.cost_usd, "phase_explore")
+        if neuro_resp:
+            session.track_cost(neuro_resp.cost_usd)
+            self._track_cost("neurologist", neuro_resp.cost_usd, "phase_explore")
+
+        session.add_finding(
+            session.current_iteration, "explore",
+            cardiologist=cardio_data["findings"],
+            neurologist=neuro_data["findings"],
+        )
+        session.warnings.extend(warnings)
+
+        return self._phased_result(
+            session, "explore", cardio_data, neuro_data,
+            phase_summary="Open exploration complete — unknown unknowns surfaced.",
+            warnings=warnings,
+        )
+
+    def phase_synthesize(self, session: LiveSession) -> dict:
+        """Phase 4: Synthesis + consensus score + iterate/done decision.
+
+        Uses cardiologist for synthesis. Calculates consensus score.
+        Advances session to 'synthesize'.
+        """
+        session.advance_phase("synthesize")
+        topic = session.topic
+        warnings: List[str] = []
+
+        # Build reports from accumulated findings
+        iter_findings = [
+            f for f in session.accumulated_findings
+            if f["iteration"] == session.current_iteration
+        ]
+        cardio_parts: List[str] = []
+        neuro_parts: List[str] = []
+        explore_cardio: List[str] = []
+        explore_neuro: List[str] = []
+        for f in iter_findings:
+            is_explore = f["phase"] == "explore"
+            if f.get("cardiologist"):
+                items = f["cardiologist"] if isinstance(f["cardiologist"], list) else [str(f["cardiologist"])]
+                if is_explore:
+                    explore_cardio.extend(items)
+                else:
+                    cardio_parts.extend(items)
+            if f.get("neurologist"):
+                items = f["neurologist"] if isinstance(f["neurologist"], list) else [str(f["neurologist"])]
+                if is_explore:
+                    explore_neuro.extend(items)
+                else:
+                    neuro_parts.extend(items)
+
+        cardio_report = "\n".join(cardio_parts) or "(no cardiologist findings)"
+        neuro_report = "\n".join(neuro_parts) or "(no neurologist findings)"
+
+        # Build exploration section
+        exploration_parts = []
+        if explore_cardio:
+            exploration_parts.append(f"--- Cardiologist Exploration ---\n" + "\n".join(explore_cardio))
+        if explore_neuro:
+            exploration_parts.append(f"--- Neurologist Exploration ---\n" + "\n".join(explore_neuro))
+        exploration_section = (
+            "=== OPEN EXPLORATION (unknown unknowns) ===\n"
+            + "\n\n".join(exploration_parts)
+            + "\n\n"
+            if exploration_parts
+            else ""
+        )
+
+        # Synthesis via cardiologist
+        synth_resp = self._safe_query(
+            self._cardiologist,
+            system=_SYNTHESIS_SYSTEM,
+            prompt=_SYNTHESIS_PROMPT.format(
+                topic=topic,
+                cardio_report=cardio_report,
+                neuro_report=neuro_report,
+                exploration_section=exploration_section,
+            ),
+        )
+
+        # Consensus via both surgeons (use original topic, not enriched)
+        consensus_result = self.consensus(
+            f"The analysis of '{session.original_topic}' is complete and all issues addressed."
+        )
+        score = consensus_result.weighted_score
+        session.add_consensus_score(score)
+
+        synth_data = self._surgeon_data(synth_resp)
+        if synth_resp:
+            session.track_cost(synth_resp.cost_usd)
+            self._track_cost("cardiologist", synth_resp.cost_usd, "phase_synthesize")
+        session.track_cost(consensus_result.total_cost)
+
+        # Update confidence from consensus
+        cardio_data = {
+            "findings": synth_data["findings"] if synth_resp else [],
+            "confidence": consensus_result.cardiologist_confidence,
+            "cost_usd": (synth_resp.cost_usd if synth_resp else 0.0) + consensus_result.total_cost / 2,
+            "latency_ms": synth_resp.latency_ms if synth_resp else 0,
+            "status": "ok" if synth_resp else "unavailable",
+        }
+        neuro_data = {
+            "findings": [],
+            "confidence": consensus_result.neurologist_confidence,
+            "cost_usd": consensus_result.total_cost / 2,
+            "latency_ms": 0,
+            "status": "ok" if consensus_result.neurologist_confidence > 0 else "unavailable",
+        }
+
+        if synth_resp is None:
+            warnings.append("Synthesis failed — cardiologist unreachable.")
+
+        session.add_finding(
+            session.current_iteration, "synthesize",
+            cardiologist=cardio_data["findings"],
+            neurologist=neuro_data["findings"],
+        )
+        session.warnings.extend(warnings)
+
+        next_action = session.next_action()
+        summary = f"Consensus score: {score:.2f}. Next: {next_action}."
+
+        result = self._phased_result(
+            session, "synthesize", cardio_data, neuro_data,
+            phase_summary=summary, warnings=warnings,
+        )
+        result["consensus_score"] = score
+        return result
+
+    def phase_iterate(self, session: LiveSession) -> dict:
+        """Phase 5: Increment iteration, reset to 'start' with accumulated context.
+
+        Builds the next iteration's topic by including prior findings.
+        """
+        session.current_iteration += 1
+        session.advance_phase("start")
+
+        # Build enriched topic with prior context
+        prior_parts: List[str] = []
+        for f in session.accumulated_findings:
+            phase_label = f.get("phase", "?")
+            iter_label = f.get("iteration", "?")
+            items = []
+            if f.get("cardiologist"):
+                c = f["cardiologist"]
+                items.append("Cardio: " + ("; ".join(c) if isinstance(c, list) else str(c)))
+            if f.get("neurologist"):
+                n = f["neurologist"]
+                items.append("Neuro: " + ("; ".join(n) if isinstance(n, list) else str(n)))
+            if items:
+                prior_parts.append(f"[Iter {iter_label}/{phase_label}] " + " | ".join(items))
+
+        prior_context = "\n".join(prior_parts)
+        enriched_topic = (
+            f"{session.original_topic}\n\n"
+            f"=== Prior findings (iteration {session.current_iteration}/{session.max_iterations}) ===\n"
+            f"{prior_context}"
+        )
+
+        # Store enriched topic for next phase_start to pick up (original preserved)
+        session.topic = enriched_topic
+        session.updated_at = datetime.now(timezone.utc).isoformat()
+
+        return {
+            "session_id": session.session_id,
+            "phase": "start",
+            "iteration": session.current_iteration,
+            "cardiologist": {"findings": [], "confidence": 0.0, "cost_usd": 0.0, "latency_ms": 0, "status": "pending"},
+            "neurologist": {"findings": [], "confidence": 0.0, "cost_usd": 0.0, "latency_ms": 0, "status": "pending"},
+            "phase_summary": f"Iteration {session.current_iteration} ready. Topic enriched with prior findings.",
+            "next_action": "start",
+            "warnings": [],
+        }
 
     # ── Private helpers ──────────────────────────────────────────────
 
