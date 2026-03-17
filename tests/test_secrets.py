@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from three_surgeons.core.config import Config, SurgeonConfig
 from three_surgeons.core.secrets import (
     LOCAL_PROVIDERS,
     PROVIDER_KEY_MAP,
@@ -16,6 +17,7 @@ from three_surgeons.core.secrets import (
     _probe_env,
     _probe_keychain,
     _probe_shell_profile,
+    diagnose_auth,
 )
 
 
@@ -195,3 +197,48 @@ class TestProbeKeychain:
     def test_returns_none_on_non_macos(self, _mock_which: MagicMock) -> None:
         result = _probe_keychain("cardiologist")
         assert result is None
+
+
+class TestDiagnoseAuth:
+    """Test the main diagnose_auth entry point."""
+
+    def test_local_provider_skips_auth(self) -> None:
+        config = Config()
+        config.neurologist = SurgeonConfig(provider="ollama", endpoint="http://localhost:11434/v1")
+        plan = diagnose_auth("neurologist", config)
+        assert plan.status == "local_no_auth"
+        assert plan.resolved is True
+
+    def test_env_var_present_auto_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-1234567890")
+        config = Config()
+        plan = diagnose_auth("cardiologist", config)
+        assert plan.status == "resolved"
+        assert plan.resolved is True
+
+    def test_env_var_missing_returns_options(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = Config()
+        plan = diagnose_auth("cardiologist", config)
+        assert plan.status in ("options_available", "no_sources")
+        assert plan.resolved is False
+        assert plan.key_name == "OPENAI_API_KEY"
+        assert plan.provider == "openai"
+
+    def test_includes_local_alternatives(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = Config()
+        with patch("three_surgeons.core.secrets.detect_local_backend", return_value=[
+            {"provider": "ollama", "port": 11434, "endpoint": "http://127.0.0.1:11434/v1", "models": ["qwen3:4b"]}
+        ]):
+            plan = diagnose_auth("cardiologist", config)
+        assert len(plan.local_alternatives) > 0
+        assert plan.local_alternatives[0]["provider"] == "ollama"
+
+    def test_to_safe_dict_is_serializable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        config = Config()
+        plan = diagnose_auth("cardiologist", config)
+        d = plan.to_safe_dict()
+        import json
+        json.dumps(d)

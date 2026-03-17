@@ -17,6 +17,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from three_surgeons.core.config import Config, detect_local_backend
+
 logger = logging.getLogger(__name__)
 
 _SUBPROCESS_TIMEOUT = 10  # seconds
@@ -270,3 +272,112 @@ def _probe_keychain(surgeon_name: str) -> Optional[SecretSource]:
             )
     except (subprocess.TimeoutExpired, OSError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+
+def diagnose_auth(surgeon_name: str, config: Config) -> RemediationPlan:
+    """Detect available secret sources and attempt auto-resolution.
+
+    1. Read surgeon config
+    2. If local provider → return immediately (no auth needed)
+    3. Check env var (fast path)
+    4. Probe secret sources: shell profile, AWS, 1Password, Keychain
+    5. Detect local backend alternatives
+    6. Return structured plan
+    """
+    surgeon_cfg = getattr(config, surgeon_name, None)
+    if surgeon_cfg is None:
+        return RemediationPlan(
+            surgeon=surgeon_name,
+            provider="unknown",
+            key_name="",
+            status="no_sources",
+            resolved=False,
+        )
+
+    provider = surgeon_cfg.provider
+    key_name = surgeon_cfg.api_key_env or PROVIDER_KEY_MAP.get(provider, "")
+
+    # Local providers don't need auth
+    if provider in LOCAL_PROVIDERS:
+        return RemediationPlan(
+            surgeon=surgeon_name,
+            provider=provider,
+            key_name="",
+            status="local_no_auth",
+            resolved=True,
+        )
+
+    sources: List[SecretSource] = []
+
+    # 1. Check env var (fast path)
+    env_source = _probe_env(key_name)
+    if env_source is not None:
+        return RemediationPlan(
+            surgeon=surgeon_name,
+            provider=provider,
+            key_name=key_name,
+            status="resolved",
+            resolved=True,
+            sources=[env_source],
+        )
+
+    # 2. Shell profile
+    shell_source = _probe_shell_profile(key_name)
+    if shell_source is not None:
+        # Attempt auto-resolve: if it's a simple value (not command substitution)
+        if not shell_source.metadata.get("uses_command"):
+            line = shell_source.metadata.get("line", "")
+            match = re.search(rf'{re.escape(key_name)}=["\']?([^"\']+)["\']?', line)
+            if match:
+                resolved_key = match.group(1)
+                if len(resolved_key) >= 6:
+                    os.environ[key_name] = resolved_key
+                    return RemediationPlan(
+                        surgeon=surgeon_name,
+                        provider=provider,
+                        key_name=key_name,
+                        status="resolved",
+                        resolved=True,
+                        sources=[shell_source],
+                    )
+        sources.append(shell_source)
+
+    # 3. AWS Secrets Manager
+    aws_source = _probe_aws(key_name, provider)
+    if aws_source is not None:
+        sources.append(aws_source)
+
+    # 4. 1Password
+    op_source = _probe_1password(key_name, provider)
+    if op_source is not None:
+        sources.append(op_source)
+
+    # 5. macOS Keychain
+    keychain_source = _probe_keychain(surgeon_name)
+    if keychain_source is not None:
+        sources.append(keychain_source)
+
+    # 6. Detect local alternatives
+    local_alts: List[Dict[str, Any]] = []
+    try:
+        detected = detect_local_backend(timeout_s=2.0)
+        local_alts = detected
+    except Exception:
+        pass
+
+    status = "options_available" if sources else "no_sources"
+
+    return RemediationPlan(
+        surgeon=surgeon_name,
+        provider=provider,
+        key_name=key_name,
+        status=status,
+        resolved=False,
+        sources=sources,
+        local_alternatives=local_alts,
+    )
