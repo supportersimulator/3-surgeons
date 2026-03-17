@@ -421,3 +421,28 @@ class TestPhaseSequenceIntegration:
         assert len(session.accumulated_findings) >= 4  # start, deepen, explore, synthesize
         assert len(session.consensus_scores) == 1
         assert session.total_cost > 0
+
+    def test_phase_start_after_iterate_no_crash(self, tmp_path):
+        """Regression: CLI calls phase_iterate then phase_start on iteration > 1.
+
+        phase_iterate sets phase to 'start', then phase_start must not crash
+        trying start→start transition (was ValueError before fix).
+        """
+        team = _make_team(tmp_path)
+        session = _make_session()
+
+        # Run full first iteration
+        team.phase_start(session)
+        team.phase_deepen(session)
+        team.phase_explore(session)
+        team.phase_synthesize(session)
+
+        # Iterate resets to start
+        team.phase_iterate(session)
+        assert session.current_phase == "start"
+
+        # This is the exact call sequence from CLI --live on iteration > 1.
+        # Before the fix, this raised ValueError: Cannot transition start→start
+        result = team.phase_start(session)
+        assert result["phase"] == "start"
+        assert session.current_iteration == 2

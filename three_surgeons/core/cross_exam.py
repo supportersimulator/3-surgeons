@@ -677,7 +677,8 @@ class SurgeryTeam:
         Queries cardiologist and neurologist with the session topic.
         Returns structured per-surgeon data. Advances session to 'start'.
         """
-        session.advance_phase("start")
+        if session.current_phase != "start":
+            session.advance_phase("start")
         topic = session.topic
         if session.file_context:
             topic = f"{topic}\n\n{session.file_context}"
