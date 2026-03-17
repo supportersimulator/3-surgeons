@@ -128,21 +128,24 @@ class TestLiveSession:
     def test_next_action_after_synthesize_below_threshold(self):
         s = LiveSession(session_id="x", topic="t", mode="iterative", depth="full")
         s.current_iteration = 1
-        s.advance_phase("synthesize")
+        for phase in ["start", "deepen", "explore", "synthesize"]:
+            s.advance_phase(phase)
         s.add_consensus_score(0.4)
         assert s.next_action() == "iterate"
 
     def test_next_action_after_synthesize_at_max(self):
         s = LiveSession(session_id="x", topic="t", mode="iterative", depth="full")
         s.current_iteration = 3
-        s.advance_phase("synthesize")
+        for phase in ["start", "deepen", "explore", "synthesize"]:
+            s.advance_phase(phase)
         s.add_consensus_score(0.4)
         assert s.next_action() == "done"
 
     def test_next_action_consensus_reached(self):
         s = LiveSession(session_id="x", topic="t", mode="iterative", depth="full")
         s.current_iteration = 1
-        s.advance_phase("synthesize")
+        for phase in ["start", "deepen", "explore", "synthesize"]:
+            s.advance_phase(phase)
         s.add_consensus_score(0.85)
         assert s.next_action() == "done"
 

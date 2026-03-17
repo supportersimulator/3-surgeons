@@ -29,6 +29,7 @@ class LiveSession:
     topic: str
     mode: str
     depth: str
+    original_topic: str = ""
     file_paths: List[str] = field(default_factory=list)
     file_context: str = ""
     current_phase: str = "created"
@@ -43,12 +44,29 @@ class LiveSession:
     max_iterations: int = 0
 
     def __post_init__(self) -> None:
+        if not self.original_topic:
+            self.original_topic = self.topic
         if self.max_iterations == 0:
             self.max_iterations = _MODE_MAX_ITERS.get(self.mode, 1)
 
     def advance_phase(self, phase: str) -> None:
         if phase not in _PHASE_ORDER:
             raise ValueError(f"Invalid phase {phase!r}, must be one of {_PHASE_ORDER}")
+        current_idx = _PHASE_ORDER.index(self.current_phase)
+        target_idx = _PHASE_ORDER.index(phase)
+        # Allow synthesize -> start (iteration reset)
+        is_iteration_reset = (self.current_phase == "synthesize" and phase == "start")
+        if not is_iteration_reset and target_idx != current_idx + 1:
+            if current_idx + 1 < len(_PHASE_ORDER):
+                raise ValueError(
+                    f"Cannot transition from {self.current_phase!r} to {phase!r}; "
+                    f"next valid phase is {_PHASE_ORDER[current_idx + 1]!r}"
+                )
+            else:
+                raise ValueError(
+                    f"Cannot transition from {self.current_phase!r} to {phase!r}; "
+                    f"session is at terminal phase"
+                )
         self.current_phase = phase
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
@@ -95,6 +113,7 @@ class LiveSession:
         return {
             "session_id": self.session_id,
             "topic": self.topic,
+            "original_topic": self.original_topic,
             "mode": self.mode,
             "depth": self.depth,
             "file_paths": self.file_paths,
@@ -115,6 +134,7 @@ class LiveSession:
         return cls(
             session_id=d["session_id"],
             topic=d["topic"],
+            original_topic=d.get("original_topic", d["topic"]),
             mode=d["mode"],
             depth=d["depth"],
             file_paths=d.get("file_paths", []),
