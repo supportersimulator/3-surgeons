@@ -20,7 +20,7 @@ http = ["starlette>=0.40", "uvicorn>=0.30", "httptools>=0.6"]
 ide = ["websockets>=16.0"]
 redis = ["redis>=5.0"]
 contextdna = ["redis>=5.0", "requests>=2.28"]
-test = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-timeout>=2.2"]
+test = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-timeout>=2.2", "starlette>=0.40", "uvicorn>=0.30", "httptools>=0.6"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 all = ["three-surgeons[mcp,http,redis,contextdna]"]
 
