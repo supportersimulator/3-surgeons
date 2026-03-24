@@ -17,6 +17,8 @@ from enum import Enum
 from pathlib import Path
 from typing import List, Optional, Protocol
 
+from three_surgeons.adapters._protocol import SurgeryAdapter
+from three_surgeons.adapters._standalone import StandaloneAdapter
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.file_access import AccessOutcome, FileAccessPolicy, read_files_with_budget, wrap_file_content
 from three_surgeons.core.sessions import LiveSession
@@ -227,11 +229,13 @@ class SurgeryTeam:
         neurologist: LLMProviderLike,
         evidence: EvidenceStore,
         state: StateBackend,
+        adapter: SurgeryAdapter | None = None,
     ) -> None:
         self._cardiologist = cardiologist
         self._neurologist = neurologist
         self._evidence = evidence
         self._state = state
+        self._adapter = adapter or StandaloneAdapter()
 
     # ── consult ──────────────────────────────────────────────────────
 
@@ -1165,6 +1169,7 @@ class SurgeryTeam:
         """Track cost in the evidence store. Skip zero-cost (local models)."""
         if cost_usd > 0:
             self._evidence.track_cost(surgeon, cost_usd, operation)
+        self._adapter.on_cost(surgeon, cost_usd, operation)
 
     def _log_cross_exam(self, result: CrossExamResult) -> None:
         """Log a cross-exam result to the evidence store."""
@@ -1172,7 +1177,11 @@ class SurgeryTeam:
             topic=result.topic,
             neurologist_report=result.neurologist_report or "(unavailable)",
             cardiologist_report=result.cardiologist_report or "(unavailable)",
-            consensus_score=0.0,  # No consensus score for consult/cross_examine
+            consensus_score=getattr(result, 'consensus_score', 0.0),
             neurologist_exploration=result.neurologist_exploration or "",
             cardiologist_exploration=result.cardiologist_exploration or "",
         )
+        self._adapter.on_cross_exam_logged(result.topic, {
+            "consensus_score": getattr(result, 'consensus_score', 0.0),
+            "iteration": getattr(result, 'iteration', 0),
+        })

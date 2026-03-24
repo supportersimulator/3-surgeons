@@ -295,7 +295,8 @@ class TestSurgeryTeamConstructionUnchanged:
     def test_init_signature(self):
         sig = inspect.signature(SurgeryTeam.__init__)
         params = list(sig.parameters.keys())
-        assert params == ["self", "cardiologist", "neurologist", "evidence", "state"]
+        # adapter param added in v1.1 — optional, defaults to StandaloneAdapter
+        assert params == ["self", "cardiologist", "neurologist", "evidence", "state", "adapter"]
 
     def test_construction_with_mocks(self, tmp_path):
         """Old 4-arg construction pattern still works."""
