@@ -25,6 +25,7 @@ class CompositeAdapter:
         self._adapters = list(adapters)
         self._fail_fast = fail_fast
         self._gate_mode = gate_mode
+        self._error_counts: Dict[str, int] = {}
 
     @property
     def capabilities(self) -> Capability:
@@ -33,8 +34,10 @@ class CompositeAdapter:
             try:
                 result |= adapter.capabilities
             except Exception as exc:  # pragma: no cover
-                logger.debug("Adapter %s.capabilities probe failed: %s",
-                             type(adapter).__name__, exc)
+                adapter_id = type(adapter).__name__
+                logger.warning("Adapter %s.capabilities probe failed: %s",
+                               adapter_id, exc)
+                self._error_counts[adapter_id] = self._error_counts.get(adapter_id, 0) + 1
         return result
 
     @property
@@ -51,6 +54,7 @@ class CompositeAdapter:
             except Exception as exc:
                 adapter_name = type(adapter).__name__
                 logger.error("Adapter %s.%s failed: %s", adapter_name, method, exc)
+                self._error_counts[adapter_name] = self._error_counts.get(adapter_name, 0) + 1
                 try:
                     adapter.on_error(method, exc, {"args": args, "kwargs": kwargs})
                 except Exception:

@@ -13,6 +13,8 @@ from three_surgeons.adapters._protocol import SurgeryAdapter, Capability
 
 logger = logging.getLogger(__name__)
 
+_error_counts: dict[str, int] = {}
+
 _DB_DIR = os.path.expanduser("~/.3surgeons")
 _DB_PATH = os.path.join(_DB_DIR, "observability.db")
 
@@ -47,7 +49,8 @@ class ObservabilityAdapter(SurgeryAdapter):
             )
             self._conn.commit()
         except Exception as exc:
-            logger.debug("ObservabilityAdapter on_init failed: %s", exc)
+            logger.warning("ObservabilityAdapter on_init failed: %s", exc)
+            _error_counts["ObservabilityAdapter"] = _error_counts.get("ObservabilityAdapter", 0) + 1
 
     def on_cost(self, surgeon: str, cost_usd: float, operation: str) -> None:
         self._insert_event(
@@ -103,7 +106,8 @@ class ObservabilityAdapter(SurgeryAdapter):
             try:
                 self._conn.close()
             except Exception as exc:
-                logger.debug("ObservabilityAdapter close failed: %s", exc)
+                logger.warning("ObservabilityAdapter close failed: %s", exc)
+                _error_counts["ObservabilityAdapter"] = _error_counts.get("ObservabilityAdapter", 0) + 1
             finally:
                 self._conn = None
 
@@ -120,7 +124,7 @@ class ObservabilityAdapter(SurgeryAdapter):
     ) -> None:
         try:
             if self._conn is None:
-                logger.debug("ObservabilityAdapter: DB connection not available")
+                logger.warning("ObservabilityAdapter: DB connection not available")
                 return
             self._conn.execute(
                 "INSERT INTO events (timestamp, event_type, operation, data, surgeon) "
@@ -135,4 +139,5 @@ class ObservabilityAdapter(SurgeryAdapter):
             )
             self._conn.commit()
         except Exception as exc:
-            logger.debug("ObservabilityAdapter insert failed: %s", exc)
+            logger.warning("ObservabilityAdapter insert failed: %s", exc)
+            _error_counts["ObservabilityAdapter"] = _error_counts.get("ObservabilityAdapter", 0) + 1

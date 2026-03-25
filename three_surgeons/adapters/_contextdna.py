@@ -12,6 +12,8 @@ from three_surgeons.adapters._protocol import SurgeryAdapter, Capability
 
 logger = logging.getLogger(__name__)
 
+_error_counts: dict[str, int] = {}
+
 _BASE_URL = "http://127.0.0.1:8080"
 _FINDING_ENDPOINT = f"{_BASE_URL}/contextdna/superhero/finding"
 _HEALTH_ENDPOINT = f"{_BASE_URL}/health"
@@ -101,4 +103,5 @@ class ContextDNAAdapter(SurgeryAdapter):
             with urllib.request.urlopen(req, timeout=3):
                 pass
         except Exception as exc:
-            logger.debug("ContextDNA POST failed: %s", exc)
+            logger.warning("ContextDNA POST failed: %s", exc)
+            _error_counts["ContextDNAAdapter"] = _error_counts.get("ContextDNAAdapter", 0) + 1

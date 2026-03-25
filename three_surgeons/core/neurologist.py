@@ -9,10 +9,13 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from three_surgeons.core.cross_exam import _read_file_context
 from three_surgeons.core.models import LLMProvider, LLMResponse
+
+if TYPE_CHECKING:
+    from three_surgeons.adapters._protocol import SurgeryAdapter
 
 
 @dataclass
@@ -165,6 +168,7 @@ def neurologist_challenge(
     neurologist: Any,
     evidence_store: Any = None,
     file_paths: Optional[List[str]] = None,
+    adapter: Optional["SurgeryAdapter"] = None,
 ) -> ChallengeResult:
     """Run corrigibility skeptic challenge on a topic.
 
@@ -209,7 +213,15 @@ def neurologist_challenge(
         raw = ""
 
     challenges = _parse_challenges(raw)
-    return ChallengeResult(topic=topic, challenges=challenges, raw_response=raw)
+    challenge_result = ChallengeResult(topic=topic, challenges=challenges, raw_response=raw)
+
+    if adapter is not None:
+        try:
+            adapter.on_cross_exam_logged(topic, {"type": "neurologist_challenge"})
+        except Exception:
+            pass
+
+    return challenge_result
 
 
 def _parse_challenges(raw: str) -> List[Challenge]:

@@ -93,7 +93,7 @@ class GitAdapter:
             if result.returncode == 0:
                 return result.stdout.strip()
         except Exception as exc:
-            logger.debug("Git log failed: %s", exc)
+            logger.warning("Git log failed: %s", exc)
         return ""
 
     def _get_changed_files(self) -> str:
@@ -105,5 +105,5 @@ class GitAdapter:
             if result.returncode == 0:
                 return result.stdout.strip()
         except Exception as exc:
-            logger.debug("Git diff failed: %s", exc)
+            logger.warning("Git diff failed: %s", exc)
         return ""

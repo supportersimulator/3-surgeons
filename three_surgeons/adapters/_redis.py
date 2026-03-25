@@ -53,14 +53,14 @@ class RedisAdapter:
                            "started": time.time()}),
             )
         except Exception as exc:
-            logger.debug("Redis workflow_start failed: %s", exc)
+            logger.warning("Redis workflow_start failed: %s", exc)
 
     def on_workflow_end(self, operation: str, topic: str, result: Any,
                         error: Optional[Exception] = None) -> None:
         try:
             self._redis.delete("surgeons:workflow_active")
         except Exception as exc:
-            logger.debug("Redis workflow_end failed: %s", exc)
+            logger.warning("Redis workflow_end failed: %s", exc)
 
     def on_cost(self, surgeon: str, cost_usd: float, operation: str) -> None:
         try:
@@ -71,7 +71,7 @@ class RedisAdapter:
             pipe.expire(f"surgeons:costs:{date_key}", 604800)  # 7d TTL
             pipe.execute()
         except Exception as exc:
-            logger.debug("Redis on_cost failed: %s", exc)
+            logger.warning("Redis on_cost failed: %s", exc)
 
     def on_cross_exam_logged(self, topic: str, data: Dict[str, Any]) -> None:
         try:
@@ -87,15 +87,19 @@ class RedisAdapter:
             pipe.expire("surgeons:cross_exam_results", 86400)  # 24h TTL
             pipe.execute()
         except Exception as exc:
-            logger.debug("Redis on_cross_exam_logged failed: %s", exc)
+            logger.warning("Redis on_cross_exam_logged failed: %s", exc)
 
     def on_error(self, operation: str, error: Exception,
                  context: Dict[str, Any]) -> None:
         try:
             self._redis.hincrby("surgeons:errors", operation, 1)
             self._redis.expire("surgeons:errors", 86400)
-        except Exception:
-            pass  # Don't recurse on error logging
+        except Exception as exc:
+            logger.warning("Redis on_error counter write failed: %s", exc)
+            try:
+                self._redis.incr("3s:adapter:errors:RedisAdapter")
+            except Exception:
+                pass  # Don't recurse further
 
     def enrich_topic(self, topic: str, operation: str) -> str:
         return topic  # Redis doesn't enrich topics

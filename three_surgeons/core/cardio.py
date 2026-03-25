@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from three_surgeons.core.cross_exam import _read_file_context
+
+if TYPE_CHECKING:
+    from three_surgeons.adapters._protocol import SurgeryAdapter
 
 
 @dataclass
@@ -54,6 +57,7 @@ def cardio_review(
     evidence_store: Any = None,
     git_context: Optional[str] = None,
     file_paths: Optional[List[str]] = None,
+    adapter: Optional["SurgeryAdapter"] = None,
 ) -> CardioReviewResult:
     """Run a cardiologist cross-examination review.
 
@@ -101,7 +105,7 @@ def cardio_review(
             if line.startswith("-") or line.startswith("*") or line.startswith("•"):
                 recommendations.append(line.lstrip("-*• ").strip())
 
-    return CardioReviewResult(
+    review_result = CardioReviewResult(
         topic=topic,
         cardiologist_findings=cardio_findings,
         neurologist_blind_spots=neuro_findings,
@@ -111,11 +115,20 @@ def cardio_review(
         recommendations=recommendations[:10],
     )
 
+    if adapter is not None:
+        try:
+            adapter.on_cross_exam_logged(topic, {"type": "cardio_review"})
+        except Exception:
+            pass
+
+    return review_result
+
 
 def ab_validate(
     description: str,
     surgery_team: Any,
     gains_gate: Any = None,
+    adapter: Optional["SurgeryAdapter"] = None,
 ) -> ValidationResult:
     """Quick 3-surgeon fix validation.
 
@@ -174,6 +187,12 @@ def ab_validate(
     except Exception as exc:
         result.verdict = "FLAG"
         result.reasoning = f"Consensus check error: {exc}"
+
+    if adapter is not None:
+        try:
+            adapter.on_cross_exam_logged(description, {"type": "ab_validate", "verdict": result.verdict})
+        except Exception:
+            pass
 
     return result
 
