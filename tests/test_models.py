@@ -64,7 +64,7 @@ class TestCreateOpenAIProvider:
             provider="openai",
             endpoint="https://api.openai.com/v1",
             model="gpt-4.1-mini",
-            api_key_env="OPENAI_API_KEY",
+            api_key_env="Context_DNA_OPENAI",
             role="test",
         )
         provider = create_provider(config)
@@ -138,7 +138,7 @@ class TestProviderEndpointStripping:
             provider="openai",
             endpoint="https://api.openai.com/v1/",
             model="gpt-4.1-mini",
-            api_key_env="OPENAI_API_KEY",
+            api_key_env="Context_DNA_OPENAI",
             role="test",
         )
         provider = create_provider(config)

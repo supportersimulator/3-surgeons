@@ -116,7 +116,7 @@ def init(detect: bool) -> None:
         click.echo("  1. Hybrid -- OpenAI + local LLM (no local backend detected)")
         click.echo("     Supported: mlx_lm.server | Ollama | LM Studio | vLLM")
     click.echo("  2. API-Only -- OpenAI + DeepSeek (no local LLM needed)")
-    click.echo("     Requires: OPENAI_API_KEY + DEEPSEEK_API_KEY env vars")
+    click.echo("     Requires: Context_DNA_OPENAI + Context_DNA_Deepseek env vars")
     click.echo("  3. Local-Only -- local LLM only ($0 cost, needs local server)")
     click.echo("  4. Custom -- configure manually")
 
@@ -160,7 +160,7 @@ def init(detect: bool) -> None:
         cardio_provider = click.prompt("Provider", default="openai")
         cardio_model = click.prompt("Model", default="gpt-4.1-mini")
         cardio_endpoint = click.prompt("Endpoint", default="https://api.openai.com/v1")
-        cardio_api_key_env = click.prompt("API key env var", default="OPENAI_API_KEY")
+        cardio_api_key_env = click.prompt("API key env var", default="Context_DNA_OPENAI")
 
         click.echo(f"\n--- Neurologist (detected: {default_neuro_provider}) ---")
         neuro_provider = click.prompt("Provider", default=default_neuro_provider)

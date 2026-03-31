@@ -4,8 +4,8 @@ These tests hit live APIs and are excluded from the default test run.
 Run explicitly with: pytest -m integration tests/test_llm_integration.py
 
 API keys are loaded from environment variables:
-  OPENAI_API_KEY   - OpenAI API (cardiologist default)
-  DEEPSEEK_API_KEY - DeepSeek API (alternative external provider)
+  Context_DNA_OPENAI   - OpenAI API (cardiologist default)
+  Context_DNA_Deepseek - DeepSeek API (alternative external provider)
 
 For local MLX tests, the server must be running on port 5044.
 """
@@ -27,15 +27,15 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def openai_provider() -> LLMProvider:
-    """Create an OpenAI LLMProvider using OPENAI_API_KEY from environment."""
-    key = os.environ.get("OPENAI_API_KEY")
+    """Create an OpenAI LLMProvider using Context_DNA_OPENAI from environment."""
+    key = os.environ.get("Context_DNA_OPENAI")
     if not key or len(key) < 6:
-        pytest.skip("OPENAI_API_KEY not set")
+        pytest.skip("Context_DNA_OPENAI not set")
     config = SurgeonConfig(
         provider="openai",
         endpoint="https://api.openai.com/v1",
         model="gpt-4.1-mini",
-        api_key_env="OPENAI_API_KEY",
+        api_key_env="Context_DNA_OPENAI",
         role="Integration test cardiologist",
     )
     return LLMProvider(config)
@@ -43,15 +43,15 @@ def openai_provider() -> LLMProvider:
 
 @pytest.fixture
 def deepseek_provider() -> LLMProvider:
-    """Create a DeepSeek LLMProvider using DEEPSEEK_API_KEY from environment."""
-    key = os.environ.get("DEEPSEEK_API_KEY")
+    """Create a DeepSeek LLMProvider using Context_DNA_Deepseek from environment."""
+    key = os.environ.get("Context_DNA_Deepseek")
     if not key or len(key) < 6:
-        pytest.skip("DEEPSEEK_API_KEY not set")
+        pytest.skip("Context_DNA_Deepseek not set")
     config = SurgeonConfig(
         provider="deepseek",
         endpoint="https://api.deepseek.com/v1",
         model="deepseek-chat",
-        api_key_env="DEEPSEEK_API_KEY",
+        api_key_env="Context_DNA_Deepseek",
         role="Integration test DeepSeek provider",
     )
     return LLMProvider(config)
@@ -205,9 +205,9 @@ class TestProviderFallback:
 
     def test_fallback_from_bad_endpoint_to_openai(self):
         """LLMProvider falls back when primary endpoint is unreachable."""
-        key = os.environ.get("OPENAI_API_KEY")
+        key = os.environ.get("Context_DNA_OPENAI")
         if not key or len(key) < 6:
-            pytest.skip("OPENAI_API_KEY not set")
+            pytest.skip("Context_DNA_OPENAI not set")
 
         bad_config = SurgeonConfig(
             provider="openai",
@@ -219,7 +219,7 @@ class TestProviderFallback:
             provider="openai",
             endpoint="https://api.openai.com/v1",
             model="gpt-4.1-mini",
-            api_key_env="OPENAI_API_KEY",
+            api_key_env="Context_DNA_OPENAI",
         )
         provider = LLMProvider(bad_config, fallbacks=[fallback_config])
         resp = provider.query(

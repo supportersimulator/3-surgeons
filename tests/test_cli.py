@@ -58,7 +58,7 @@ class TestInitCommand:
         result = runner.invoke(
             cli,
             ["init"],
-            input="4\nopenai\ngpt-4.1-mini\nhttps://api.openai.com/v1\nOPENAI_API_KEY\nollama\nqwen3:4b\nhttp://localhost:11434/v1\n\n",
+            input="4\nopenai\ngpt-4.1-mini\nhttps://api.openai.com/v1\nContext_DNA_OPENAI\nollama\nqwen3:4b\nhttp://localhost:11434/v1\n\n",
         )
         assert result.exit_code == 0
         assert (tmp_path / ".3surgeons" / "config.yaml").exists()
@@ -70,7 +70,7 @@ class TestInitCommand:
         runner.invoke(
             cli,
             ["init"],
-            input="4\nopenai\ngpt-4.1-mini\nhttps://api.openai.com/v1\nOPENAI_API_KEY\nollama\nqwen3:4b\nhttp://localhost:11434/v1\n\n",
+            input="4\nopenai\ngpt-4.1-mini\nhttps://api.openai.com/v1\nContext_DNA_OPENAI\nollama\nqwen3:4b\nhttp://localhost:11434/v1\n\n",
         )
         config_path = tmp_path / ".3surgeons" / "config.yaml"
         data = yaml.safe_load(config_path.read_text())

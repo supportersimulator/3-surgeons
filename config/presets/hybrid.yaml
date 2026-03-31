@@ -1,6 +1,6 @@
 # 3-Surgeons: Hybrid Mode (Recommended)
 # Cardiologist uses OpenAI API, Neurologist uses any local LLM.
-# Required: OPENAI_API_KEY env var + local LLM server running (Ollama, MLX, LM Studio, vLLM)
+# Required: Context_DNA_OPENAI env var + local LLM server running (Ollama, MLX, LM Studio, vLLM)
 # Run '3s init' to auto-detect your local backend.
 surgeons:
   cardiologist:
@@ -8,7 +8,7 @@ surgeons:
     provider: openai
     endpoint: https://api.openai.com/v1
     model: gpt-4.1-mini
-    api_key_env: OPENAI_API_KEY
+    api_key_env: Context_DNA_OPENAI
   neurologist:
     role: "Local intelligence — pattern recognition, corrigibility"
     provider: ollama

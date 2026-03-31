@@ -1,13 +1,13 @@
 # 3-Surgeons: MLX Hybrid Mode
 # Cardiologist uses OpenAI API, Neurologist uses local MLX server.
-# Required: OPENAI_API_KEY env var + mlx_lm.server running on port 5044
+# Required: Context_DNA_OPENAI env var + mlx_lm.server running on port 5044
 surgeons:
   cardiologist:
     role: "External perspective — cross-examination, evidence"
     provider: openai
     endpoint: https://api.openai.com/v1
     model: gpt-4.1-mini
-    api_key_env: OPENAI_API_KEY
+    api_key_env: Context_DNA_OPENAI
   neurologist:
     role: "Local intelligence — pattern recognition, corrigibility"
     provider: mlx

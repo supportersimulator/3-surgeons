@@ -21,7 +21,7 @@ class TestLoadFromYaml:
                     "provider": "openai",
                     "endpoint": "https://api.openai.com/v1",
                     "model": "gpt-4.1-mini",
-                    "api_key_env": "OPENAI_API_KEY",
+                    "api_key_env": "Context_DNA_OPENAI",
                     "role": "External perspective",
                 },
                 "neurologist": {
@@ -47,7 +47,7 @@ class TestLoadFromYaml:
         assert cfg.cardiologist.provider == "openai"
         assert cfg.cardiologist.endpoint == "https://api.openai.com/v1"
         assert cfg.cardiologist.model == "gpt-4.1-mini"
-        assert cfg.cardiologist.api_key_env == "OPENAI_API_KEY"
+        assert cfg.cardiologist.api_key_env == "Context_DNA_OPENAI"
         assert cfg.cardiologist.role == "External perspective"
 
         assert cfg.neurologist.provider == "ollama"
@@ -70,7 +70,7 @@ class TestLoadDefaults:
         # Defaults from the spec
         assert cfg.cardiologist.provider == "openai"
         assert cfg.cardiologist.model == "gpt-4.1-mini"
-        assert cfg.cardiologist.api_key_env == "OPENAI_API_KEY"
+        assert cfg.cardiologist.api_key_env == "Context_DNA_OPENAI"
 
         assert cfg.neurologist.provider == "ollama"
         assert cfg.neurologist.model == "qwen3:4b"
@@ -268,7 +268,7 @@ def test_preset_api_only_loads():
     assert preset.exists(), "api-only.yaml preset missing"
     cfg = Config.from_yaml(preset)
     assert cfg.cardiologist.provider == "openai"
-    assert cfg.neurologist.api_key_env == "DEEPSEEK_API_KEY"
+    assert cfg.neurologist.api_key_env == "Context_DNA_Deepseek"
 
 
 def test_preset_local_only_loads():

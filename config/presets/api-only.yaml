@@ -1,19 +1,19 @@
 # 3-Surgeons: API-Only Mode
 # Both surgeons use cloud APIs. No local LLM needed.
-# Required env vars: OPENAI_API_KEY, DEEPSEEK_API_KEY
+# Required env vars: Context_DNA_OPENAI, Context_DNA_Deepseek
 surgeons:
   cardiologist:
     role: "External perspective — cross-examination, evidence"
     provider: openai
     endpoint: https://api.openai.com/v1
     model: gpt-4.1-mini
-    api_key_env: OPENAI_API_KEY
+    api_key_env: Context_DNA_OPENAI
   neurologist:
     role: "Second opinion — pattern recognition, corrigibility"
     provider: deepseek
     endpoint: https://api.deepseek.com/v1
     model: deepseek-chat
-    api_key_env: DEEPSEEK_API_KEY
+    api_key_env: Context_DNA_Deepseek
 
 state:
   backend: sqlite

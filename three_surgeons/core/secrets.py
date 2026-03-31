@@ -25,10 +25,10 @@ _SUBPROCESS_TIMEOUT = 10  # seconds
 
 # All API providers and their standard env var names
 PROVIDER_KEY_MAP: Dict[str, str] = {
-    "openai": "OPENAI_API_KEY",
+    "openai": "Context_DNA_OPENAI",
     "anthropic": "ANTHROPIC_API_KEY",
     "google": "GOOGLE_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
+    "deepseek": "Context_DNA_Deepseek",
     "groq": "GROQ_API_KEY",
     "xai": "XAI_API_KEY",
     "mistral": "MISTRAL_API_KEY",

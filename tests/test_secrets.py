@@ -54,7 +54,7 @@ class TestDataStructures:
         plan = RemediationPlan(
             surgeon="cardiologist",
             provider="openai",
-            key_name="OPENAI_API_KEY",
+            key_name="Context_DNA_OPENAI",
             status="options_available",
             resolved=False,
             sources=[],
@@ -68,7 +68,7 @@ class TestDataStructures:
         plan = RemediationPlan(
             surgeon="cardiologist",
             provider="openai",
-            key_name="OPENAI_API_KEY",
+            key_name="Context_DNA_OPENAI",
             status="resolved",
             resolved=True,
             sources=[],
@@ -84,21 +84,21 @@ class TestProbeEnv:
     """Test environment variable probe."""
 
     def test_finds_existing_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-1234567890")
-        result = _probe_env("OPENAI_API_KEY")
+        monkeypatch.setenv("Context_DNA_OPENAI", "sk-test-1234567890")
+        result = _probe_env("Context_DNA_OPENAI")
         assert result is not None
         assert result.method == "env"
         assert result.available is True
         assert result.confidence == "high"
 
     def test_returns_none_when_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        result = _probe_env("OPENAI_API_KEY")
+        monkeypatch.delenv("Context_DNA_OPENAI", raising=False)
+        result = _probe_env("Context_DNA_OPENAI")
         assert result is None
 
     def test_returns_none_for_short_value(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENAI_API_KEY", "sk")
-        result = _probe_env("OPENAI_API_KEY")
+        monkeypatch.setenv("Context_DNA_OPENAI", "sk")
+        result = _probe_env("Context_DNA_OPENAI")
         assert result is None
 
 
@@ -107,8 +107,8 @@ class TestProbeShellProfile:
 
     def test_finds_export_in_profile(self, tmp_path) -> None:
         zshrc = tmp_path / ".zshrc"
-        zshrc.write_text('export OPENAI_API_KEY="sk-test-1234567890"\n')
-        result = _probe_shell_profile("OPENAI_API_KEY", search_paths=[zshrc])
+        zshrc.write_text('export Context_DNA_OPENAI="sk-test-1234567890"\n')
+        result = _probe_shell_profile("Context_DNA_OPENAI", search_paths=[zshrc])
         assert result is not None
         assert result.method == "shell_profile"
         assert result.available is True
@@ -117,17 +117,17 @@ class TestProbeShellProfile:
     def test_finds_aws_secretsmanager_pattern(self, tmp_path) -> None:
         zshrc = tmp_path / ".zshrc"
         zshrc.write_text(
-            'export OPENAI_API_KEY="$(aws secretsmanager get-secret-value '
+            'export Context_DNA_OPENAI="$(aws secretsmanager get-secret-value '
             '--secret-id MY_KEY --query SecretString --output text)"\n'
         )
-        result = _probe_shell_profile("OPENAI_API_KEY", search_paths=[zshrc])
+        result = _probe_shell_profile("Context_DNA_OPENAI", search_paths=[zshrc])
         assert result is not None
         assert "aws" in result.resolve_command.lower()
 
     def test_returns_none_when_not_found(self, tmp_path) -> None:
         zshrc = tmp_path / ".zshrc"
         zshrc.write_text("# nothing here\n")
-        result = _probe_shell_profile("OPENAI_API_KEY", search_paths=[zshrc])
+        result = _probe_shell_profile("Context_DNA_OPENAI", search_paths=[zshrc])
         assert result is None
 
 
@@ -143,7 +143,7 @@ class TestProbeAws:
             stdout='{"SecretList": [{"Name": "my-openai-key", "ARN": "arn:aws:..."}]}',
         )
         mock_run.side_effect = [identity_result, list_result]
-        result = _probe_aws("OPENAI_API_KEY", "openai")
+        result = _probe_aws("Context_DNA_OPENAI", "openai")
         assert result is not None
         assert result.method == "aws_secretsmanager"
         assert result.available is True
@@ -151,7 +151,7 @@ class TestProbeAws:
 
     @patch("shutil.which", return_value=None)
     def test_returns_none_without_aws_cli(self, _mock_which: MagicMock) -> None:
-        result = _probe_aws("OPENAI_API_KEY", "openai")
+        result = _probe_aws("Context_DNA_OPENAI", "openai")
         assert result is None
 
 
@@ -162,13 +162,13 @@ class TestProbe1Password:
     @patch("subprocess.run")
     def test_detects_op_cli(self, mock_run: MagicMock, _mock_which: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout='[{"shorthand": "my"}]')
-        result = _probe_1password("OPENAI_API_KEY", "openai")
+        result = _probe_1password("Context_DNA_OPENAI", "openai")
         assert result is not None
         assert result.method == "1password"
 
     @patch("shutil.which", return_value=None)
     def test_returns_none_without_op_cli(self, _mock_which: MagicMock) -> None:
-        result = _probe_1password("OPENAI_API_KEY", "openai")
+        result = _probe_1password("Context_DNA_OPENAI", "openai")
         assert result is None
 
 
@@ -210,23 +210,23 @@ class TestDiagnoseAuth:
         assert plan.resolved is True
 
     def test_env_var_present_auto_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-test-1234567890")
+        monkeypatch.setenv("Context_DNA_OPENAI", "sk-test-1234567890")
         config = Config()
         plan = diagnose_auth("cardiologist", config)
         assert plan.status == "resolved"
         assert plan.resolved is True
 
     def test_env_var_missing_returns_options(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("Context_DNA_OPENAI", raising=False)
         config = Config()
         plan = diagnose_auth("cardiologist", config)
         assert plan.status in ("options_available", "no_sources")
         assert plan.resolved is False
-        assert plan.key_name == "OPENAI_API_KEY"
+        assert plan.key_name == "Context_DNA_OPENAI"
         assert plan.provider == "openai"
 
     def test_includes_local_alternatives(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("Context_DNA_OPENAI", raising=False)
         config = Config()
         with patch("three_surgeons.core.secrets.detect_local_backend", return_value=[
             {"provider": "ollama", "port": 11434, "endpoint": "http://127.0.0.1:11434/v1", "models": ["qwen3:4b"]}
@@ -236,7 +236,7 @@ class TestDiagnoseAuth:
         assert plan.local_alternatives[0]["provider"] == "ollama"
 
     def test_to_safe_dict_is_serializable(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("Context_DNA_OPENAI", raising=False)
         config = Config()
         plan = diagnose_auth("cardiologist", config)
         d = plan.to_safe_dict()
@@ -249,11 +249,11 @@ class TestProbeIntegration:
 
     def test_remediation_on_missing_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When env var is missing, diagnose_auth returns options."""
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("Context_DNA_OPENAI", raising=False)
         config = Config()
         plan = diagnose_auth("cardiologist", config)
         assert plan.resolved is False
-        assert plan.key_name == "OPENAI_API_KEY"
+        assert plan.key_name == "Context_DNA_OPENAI"
         d = plan.to_safe_dict()
-        assert d["key_name"] == "OPENAI_API_KEY"
+        assert d["key_name"] == "Context_DNA_OPENAI"
         assert d["status"] in ("options_available", "no_sources")

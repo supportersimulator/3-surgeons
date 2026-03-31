@@ -210,7 +210,7 @@ class Config:
         provider="openai",
         endpoint="https://api.openai.com/v1",
         model="gpt-4.1-mini",
-        api_key_env="OPENAI_API_KEY",
+        api_key_env="Context_DNA_OPENAI",
         role="External perspective -- cross-examination, evidence",
     ))
     neurologist: SurgeonConfig = field(default_factory=lambda: SurgeonConfig(
