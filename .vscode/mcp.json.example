@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "3-surgeons": {
+      "command": "${workspaceFolder}/bin/3surgeons-mcp",
+      "args": []
+    }
+  }
+}
