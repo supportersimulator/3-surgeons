@@ -162,6 +162,17 @@ Add the cloned path directly in `settings.json`:
 cursor plugin add supportersimulator/3-surgeons
 ```
 
+### Codex CLI / Codex IDE Extension
+
+```bash
+git clone https://github.com/supportersimulator/3-surgeons.git ~/.3surgeons/plugin
+cd ~/.3surgeons/plugin
+python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'
+codex mcp add 3-surgeons -- ~/.3surgeons/plugin/bin/3surgeons-mcp
+```
+
+See [CODEX.md](CODEX.md) for full setup, config options, and troubleshooting.
+
 ### Manual (any IDE)
 
 ```bash
@@ -180,7 +191,7 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'
 | Windsurf | HTTP bridge | ✅ Full support |
 | Zed | HTTP bridge | ✅ Full support |
 | OpenCode | HTTP bridge | ✅ Full support |
-| Codex CLI | HTTP bridge | ✅ Full support |
+| Codex CLI / IDE | MCP (native) | ✅ Full support — see [CODEX.md](CODEX.md) |
 
 All tools available via `3s serve` HTTP bridge. See `three_surgeons/config/ide-adapters/` for per-IDE configuration.
 
