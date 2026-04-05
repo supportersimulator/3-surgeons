@@ -1,35 +1,10 @@
-# 3-Surgeons — Codex MCP Configuration
-# ======================================
-# Copy this file to ~/.codex/config.toml (global) or .codex/config.toml (project)
-# to register the 3-Surgeons MCP server with Codex CLI and Codex IDE extension.
+# Codex MCP config for 3-Surgeons
+# Copy to ~/.codex/config.toml or .codex/config.toml in your project root.
+# Replace the command path with the absolute path to your clone.
 #
-# Both surfaces share the same config, so one setup covers CLI + IDE.
-#
-# Prerequisites:
-#   1. Clone:  git clone https://github.com/supportersimulator/3-surgeons.git ~/.3surgeons/plugin
-#   2. Install: cd ~/.3surgeons/plugin && python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'
-#   3. API key: export OPENAI_API_KEY=sk-...
-#   4. Verify:  3s probe
+# Quick install:
+#   codex mcp add 3-surgeons -- /path/to/3-surgeons/bin/3surgeons-mcp
 
-# ── MCP Server Registration ──────────────────────────────────────────────────
-#
-# Option A: Absolute path (recommended for global config)
-# Replace /ABSOLUTE/PATH/TO with your actual clone location.
-#
-# [mcp_servers."3-surgeons"]
-# command = "/ABSOLUTE/PATH/TO/3-surgeons/bin/3surgeons-mcp"
-# args = []
-#
-# Option B: Relative path (for project-scoped .codex/config.toml)
-#
 [mcp_servers."3-surgeons"]
 command = "./bin/3surgeons-mcp"
 args = []
-
-# ── Environment Variables (optional) ─────────────────────────────────────────
-# Uncomment and set if not already exported in your shell profile.
-#
-# [env]
-# OPENAI_API_KEY = "sk-..."
-# OLLAMA_HOST = "http://127.0.0.1:11434"
-# DEEPSEEK_API_KEY = "sk-..."
