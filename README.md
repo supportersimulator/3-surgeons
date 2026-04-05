@@ -173,6 +173,14 @@ codex mcp add 3-surgeons -- ~/.3surgeons/plugin/bin/3surgeons-mcp
 
 See [CODEX.md](CODEX.md) for full setup, config options, and troubleshooting.
 
+### Gemini CLI
+
+```bash
+gemini extensions install https://github.com/supportersimulator/3-surgeons
+```
+
+See [GEMINI.md](GEMINI.md) for full setup, backend configuration, and troubleshooting.
+
 ### Manual (any IDE)
 
 ```bash
@@ -192,6 +200,7 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[mcp]'
 | Zed | HTTP bridge | ✅ Full support |
 | OpenCode | HTTP bridge | ✅ Full support |
 | Codex CLI / IDE | MCP (native) | ✅ Full support — see [CODEX.md](CODEX.md) |
+| Gemini CLI | MCP (extension) | ✅ Full support — see [GEMINI.md](GEMINI.md) |
 
 All tools available via `3s serve` HTTP bridge. See `three_surgeons/config/ide-adapters/` for per-IDE configuration.
 

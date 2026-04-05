@@ -1,0 +1,14 @@
+{
+  "name": "3-surgeons",
+  "version": "1.0.0",
+  "description": "Multi-model consensus system — 3 LLMs cross-examine each other to catch blind spots on critical decisions",
+  "contextFileName": "GEMINI.md",
+  "mcpServers": {
+    "3-surgeons": {
+      "command": "${extensionPath}/bin/3surgeons-mcp",
+      "args": [],
+      "cwd": "${extensionPath}",
+      "env": {}
+    }
+  }
+}
