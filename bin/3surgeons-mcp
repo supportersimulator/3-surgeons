@@ -9,6 +9,13 @@
 
 set -euo pipefail
 
+# Load API keys from macOS Keychain if available (values never logged)
+if command -v security &>/dev/null; then
+  _k=$(security find-generic-password -s 3surgeons-cardiologist -w 2>/dev/null) && export Context_DNA_OPENAI="$_k"
+  _k=$(security find-generic-password -s 3surgeons-neurologist -w 2>/dev/null) && export Context_DNA_Deepseek="$_k"
+  unset _k
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PLUGIN_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
