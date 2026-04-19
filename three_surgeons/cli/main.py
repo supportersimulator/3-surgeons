@@ -50,11 +50,33 @@ def _detect_ides() -> list[str]:
 
 
 @click.group()
+@click.option(
+    "--cardio-provider",
+    "cardio_provider",
+    type=click.Choice(["openai", "deepseek"], case_sensitive=False),
+    default=None,
+    help=(
+        "Override the Cardiologist provider for this invocation. "
+        "openai (default) keeps gpt-4.1-mini; deepseek routes to "
+        "https://api.deepseek.com/v1 with deepseek-chat. Reads "
+        "Context_DNA_Deepseek (or DEEPSEEK_API_KEY) from the env."
+    ),
+)
 @click.pass_context
-def cli(ctx: click.Context) -> None:
+def cli(ctx: click.Context, cardio_provider: Optional[str]) -> None:
     """3-Surgeons: Multi-model consensus system."""
     ctx.ensure_object(dict)
-    ctx.obj["config"] = Config.discover()
+    config = Config.discover()
+    if cardio_provider:
+        try:
+            # require_key=False so --help, probe, and setup-check still run
+            # without a key present; commands that actually call the model
+            # will surface the missing key via the normal error path.
+            config.apply_cardiologist_provider(cardio_provider, require_key=False)
+        except ValueError as exc:
+            raise click.UsageError(str(exc)) from exc
+        ctx.obj["cardio_provider_override"] = cardio_provider.lower()
+    ctx.obj["config"] = config
 
 
 # -- init -------------------------------------------------------------------

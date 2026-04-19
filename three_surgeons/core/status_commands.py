@@ -37,10 +37,31 @@ RESEARCH_STATUS_REQS = CommandRequirements(
 # ── Commands ──────────────────────────────────────────────────────────
 
 def cmd_status(ctx: RuntimeContext) -> CommandResult:
-    """System status: healthy surgeons, active tests, state backend info."""
+    """System status: healthy surgeons, active tests, state backend info.
+
+    The ``surgeons`` section reports the configured provider for each role so
+    downstream dashboards and MCP consumers can render tags like
+    ``Cardiologist: OK [deepseek]`` or ``[openai]``.
+    """
+    cardio_cfg = getattr(ctx.config, "cardiologist", None) if ctx.config else None
+    neuro_cfg = getattr(ctx.config, "neurologist", None) if ctx.config else None
+
+    healthy_models = {getattr(llm, "model", "") for llm in ctx.healthy_llms}
+
+    def _role_status(cfg) -> Dict[str, Any]:
+        if cfg is None:
+            return {"provider": "unknown", "model": "unknown", "healthy": False}
+        return {
+            "provider": cfg.provider,
+            "model": cfg.model,
+            "healthy": cfg.model in healthy_models if cfg.model else False,
+        }
+
     surgeons_info = {
         "healthy_count": len(ctx.healthy_llms),
         "models": [getattr(llm, "model", "unknown") for llm in ctx.healthy_llms],
+        "cardiologist": _role_status(cardio_cfg),
+        "neurologist": _role_status(neuro_cfg),
     }
 
     # Active A/B test

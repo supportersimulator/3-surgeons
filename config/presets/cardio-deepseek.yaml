@@ -1,0 +1,27 @@
+# 3-Surgeons: Cardiologist-DeepSeek Mode
+# Cardiologist uses DeepSeek (OpenAI-compatible), Neurologist stays local.
+# Required: Context_DNA_Deepseek (or DEEPSEEK_API_KEY) env var
+#           + local LLM server running (Ollama, MLX, LM Studio, vLLM)
+# Equivalent to `3s --cardio-provider=deepseek ...` at the CLI.
+surgeons:
+  cardiologist:
+    role: "External perspective — cross-examination, evidence"
+    provider: deepseek
+    endpoint: https://api.deepseek.com/v1
+    model: deepseek-chat
+    api_key_env: Context_DNA_Deepseek
+  neurologist:
+    role: "Local intelligence — pattern recognition, corrigibility"
+    provider: ollama
+    endpoint: http://localhost:11434/v1
+    model: qwen3:4b
+
+state:
+  backend: sqlite
+  sqlite_path: ~/.3surgeons/state.db
+
+budgets:
+  daily_external_usd: 5.0
+
+evidence:
+  db_path: ~/.3surgeons/evidence.db

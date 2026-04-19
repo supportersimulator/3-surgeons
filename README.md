@@ -274,6 +274,53 @@ Run `3s init` for guided setup, or copy a preset from `config/presets/`.
 
 See `config/3surgeons.example.yaml` for the full schema.
 
+### Cardiologist Provider (OpenAI | DeepSeek)
+
+The Cardiologist defaults to **OpenAI `gpt-4.1-mini`**. DeepSeek is a drop-in alternative — it speaks the same OpenAI-compatible `/v1/chat/completions` wire protocol, so no adapter changes are required.
+
+**Per-invocation CLI flag** (preserves backward-compat defaults):
+
+```bash
+3s --cardio-provider=deepseek cross-exam "your topic"
+3s --cardio-provider=openai probe            # explicit default
+```
+
+When `--cardio-provider=deepseek` is set, the Cardiologist routes to `https://api.deepseek.com/v1` with model `deepseek-chat`. Common OpenAI model strings auto-translate:
+
+| OpenAI model | DeepSeek equivalent |
+|---|---|
+| `gpt-4.1-mini`, `gpt-4o-mini`, `gpt-4.1-nano`, `gpt-4.1` | `deepseek-chat` |
+| `o1-mini`, `o3-mini`, `o4-mini` | `deepseek-reasoner` |
+
+**Persistent YAML config:**
+
+```yaml
+surgeons:
+  cardiologist:
+    provider: deepseek
+    endpoint: https://api.deepseek.com/v1
+    model: deepseek-chat           # or deepseek-reasoner for o1-style reasoning
+    api_key_env: Context_DNA_Deepseek
+```
+
+Or copy the ready-made preset:
+
+```bash
+cp config/presets/cardio-deepseek.yaml ~/.3surgeons/config.yaml
+```
+
+**API key resolution order (DeepSeek):**
+
+1. The env var named in `api_key_env` (default `Context_DNA_Deepseek`)
+2. `DEEPSEEK_API_KEY` (fallback — matches `/ersim/prod/backend/DEEPSEEK_API_KEY` in AWS Secrets Manager and `.env.example`)
+3. macOS Keychain via the 3-Surgeons MCP launcher (`3surgeons-mcp`)
+
+If none are set and `--cardio-provider=deepseek` requires a live call, the CLI fails fast with an actionable message naming both env vars.
+
+**Status reporting:** `cap_status` / `3s status` surfaces the active provider under `surgeons.cardiologist.provider`, so IDE dashboards can render `Cardiologist: OK [deepseek]` vs `[openai]`.
+
+**Default unchanged:** omitting `--cardio-provider` and leaving `surgeons.cardiologist.provider` at its default preserves the original OpenAI `gpt-4.1-mini` behavior — no migration required.
+
 ## Security
 
 - **All API keys are loaded from environment variables** — never hardcoded, never committed
