@@ -68,8 +68,15 @@ class SurgeonConfig:
         """Read API key from the environment variable.
 
         Returns None if the env var is missing or the value is < 6 characters.
+        For DeepSeek, falls back through multiple env var names + DEEPSEEK_API_KEY.
         """
         value = os.environ.get(self.api_key_env)
+        if (value is None or len(value) < 6) and self.provider == "deepseek":
+            # Fallback chain for DeepSeek key
+            for alt in ("Context_DNA_Deep_Seek", "Context_DNA_Deepseek", "DEEPSEEK_API_KEY"):
+                v = os.environ.get(alt)
+                if v and len(v) >= 6:
+                    return v
         if value is None or len(value) < 6:
             return None
         return value
@@ -198,6 +205,30 @@ class TelemetryConfig:
     min_correlation_for_dependency: float = 0.80
 
 
+def _default_cardiologist() -> "SurgeonConfig":
+    """Default cardiologist config, env-aware.
+
+    LLM_PROVIDER=deepseek → route cardiologist to DeepSeek (OpenAI-compatible).
+    Otherwise (default/unset) → OpenAI gpt-4.1-mini (legacy behavior preserved).
+    """
+    provider = os.environ.get("LLM_PROVIDER", "anthropic")
+    if provider == "deepseek":
+        return SurgeonConfig(
+            provider="deepseek",
+            endpoint="https://api.deepseek.com/v1",
+            model="deepseek-chat",
+            api_key_env="Context_DNA_Deep_Seek",
+            role="External perspective -- cross-examination, evidence",
+        )
+    return SurgeonConfig(
+        provider="openai",
+        endpoint="https://api.openai.com/v1",
+        model="gpt-4.1-mini",
+        api_key_env="Context_DNA_OPENAI",
+        role="External perspective -- cross-examination, evidence",
+    )
+
+
 @dataclass
 class Config:
     """Top-level configuration for the 3-Surgeons system.
@@ -206,13 +237,7 @@ class Config:
     This configures the two external surgeons plus operational settings.
     """
 
-    cardiologist: SurgeonConfig = field(default_factory=lambda: SurgeonConfig(
-        provider="openai",
-        endpoint="https://api.openai.com/v1",
-        model="gpt-4.1-mini",
-        api_key_env="Context_DNA_OPENAI",
-        role="External perspective -- cross-examination, evidence",
-    ))
+    cardiologist: SurgeonConfig = field(default_factory=lambda: _default_cardiologist())
     neurologist: SurgeonConfig = field(default_factory=lambda: SurgeonConfig(
         provider="ollama",
         endpoint="http://localhost:11434/v1",
