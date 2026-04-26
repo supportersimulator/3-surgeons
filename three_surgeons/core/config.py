@@ -205,20 +205,42 @@ class TelemetryConfig:
     min_correlation_for_dependency: float = 0.80
 
 
+# Default DeepSeek fallback for the cardiologist surgeon.
+# When the primary cardiologist (e.g. OpenAI) returns 429/auth errors, the
+# LLMProvider walks this fallback chain. Shipped as a default so out-of-the-box
+# installs auto-recover from billing/quota incidents without YAML edits.
+#
+# api_key_env points at the canonical name; SurgeonConfig.get_api_key() also
+# probes the legacy alias `Context_DNA_Deepseek` and `DEEPSEEK_API_KEY`.
+DEEPSEEK_DEFAULT_FALLBACK: Dict[str, str] = {
+    "provider": "deepseek",
+    "endpoint": "https://api.deepseek.com/v1",
+    "model": "deepseek-chat",
+    "api_key_env": "Context_DNA_Deep_Seek",
+}
+
+
 def _default_cardiologist() -> "SurgeonConfig":
     """Default cardiologist config, env-aware.
 
     LLM_PROVIDER=deepseek → route cardiologist to DeepSeek (OpenAI-compatible).
     Otherwise (default/unset) → OpenAI gpt-4.1-mini (legacy behavior preserved).
+
+    In both branches the surgeon ships with a default DeepSeek fallback chain
+    so a primary 429 (OpenAI billing, DeepSeek throttling) is auto-healed
+    without operator YAML edits. User-supplied fallbacks always win -- the
+    default is only injected when ``fallbacks`` is empty.
     """
     provider = os.environ.get("LLM_PROVIDER", "anthropic")
     if provider == "deepseek":
+        # Primary already DeepSeek -- no point in self-fallback. Empty list.
         return SurgeonConfig(
             provider="deepseek",
             endpoint="https://api.deepseek.com/v1",
             model="deepseek-chat",
             api_key_env="Context_DNA_Deep_Seek",
             role="External perspective -- cross-examination, evidence",
+            fallbacks=[],
         )
     return SurgeonConfig(
         provider="openai",
@@ -226,6 +248,7 @@ def _default_cardiologist() -> "SurgeonConfig":
         model="gpt-4.1-mini",
         api_key_env="Context_DNA_OPENAI",
         role="External perspective -- cross-examination, evidence",
+        fallbacks=[dict(DEEPSEEK_DEFAULT_FALLBACK)],
     )
 
 
