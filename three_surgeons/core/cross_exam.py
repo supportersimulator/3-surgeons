@@ -292,8 +292,14 @@ class SurgeryTeam:
         )
         if cardio_flag:
             result.confabulation_flags["cardiologist"] = cardio_flag
+            result.cardiologist_report = self._attach_confab_marker(
+                result.cardiologist_report, cardio_flag
+            )
         if neuro_flag:
             result.confabulation_flags["neurologist"] = neuro_flag
+            result.neurologist_report = self._attach_confab_marker(
+                result.neurologist_report, neuro_flag
+            )
 
         # Log to evidence store
         self._log_cross_exam(result)
@@ -492,8 +498,29 @@ class SurgeryTeam:
         )
         if cardio_flag:
             result.confabulation_flags["cardiologist"] = cardio_flag
+            result.cardiologist_report = self._attach_confab_marker(
+                result.cardiologist_report, cardio_flag
+            )
         if neuro_flag:
             result.confabulation_flags["neurologist"] = neuro_flag
+            result.neurologist_report = self._attach_confab_marker(
+                result.neurologist_report, neuro_flag
+            )
+
+        # Synthesis is what most subagent flows surface to the caller; if
+        # either surgeon was flagged the synthesis is contaminated, so prepend
+        # a banner so the caller can't miss it.
+        if (cardio_flag or neuro_flag) and result.synthesis:
+            flagged = []
+            if cardio_flag:
+                flagged.append("cardiologist")
+            if neuro_flag:
+                flagged.append("neurologist")
+            banner = (
+                f"[WARNING] Confabulation flag on: {', '.join(flagged)} "
+                "(see surgeon report for signal details)\n\n"
+            )
+            result.synthesis = banner + result.synthesis
 
         # Log to evidence store
         self._log_cross_exam(result)
@@ -1244,6 +1271,31 @@ class SurgeryTeam:
         except Exception as exc:  # pragma: no cover - state backend issues
             logger.warning("Failed to increment confab counter: %s", exc)
         return report.to_dict()
+
+    @staticmethod
+    def _confab_warning_marker(report: dict) -> str:
+        """Build the inline warning marker appended to surgeon output.
+
+        Subagent / CLI callers consume the surgeon's `*_report` field as a
+        plain string. A separate `confabulation_flags` dict is easy to miss
+        when the result is rendered as text. The marker guarantees the
+        flag is visible in any caller that prints the report.
+        """
+        signals = report.get("signals", []) if isinstance(report, dict) else []
+        confidence = report.get("confidence", 0.0) if isinstance(report, dict) else 0.0
+        signal_str = ", ".join(signals) if signals else "(no signal detail)"
+        return (
+            f"\n\n[WARNING] Confabulation flag: confidence={confidence:.2f} "
+            f"signals=[{signal_str}]"
+        )
+
+    def _attach_confab_marker(
+        self, report_text: Optional[str], flag: Optional[dict]
+    ) -> Optional[str]:
+        """Return `report_text` with a visible confab marker appended if flagged."""
+        if not report_text or not flag:
+            return report_text
+        return report_text + self._confab_warning_marker(flag)
 
     def _log_cross_exam(self, result: CrossExamResult) -> None:
         """Log a cross-exam result to the evidence store."""

@@ -243,16 +243,38 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
     config: Config = ctx.obj["config"]
     click.echo("Probing surgeons...\n")
 
+    # Confabulation counters from state backend (RACE O2). Never block probe
+    # on a state-backend hiccup -- counters are diagnostic, not gating.
+    confab_counts: dict[str, int] = {"cardiologist": 0, "neurologist": 0}
+    confab_total = 0
+    try:
+        _state = create_backend_from_config(config.state)
+        for _surgeon_key in ("cardiologist", "neurologist"):
+            _raw = _state.get(f"confab:by_surgeon:{_surgeon_key}")
+            try:
+                confab_counts[_surgeon_key] = int(_raw) if _raw is not None else 0
+            except (TypeError, ValueError):
+                confab_counts[_surgeon_key] = 0
+        _raw_total = _state.get("confab:total_flagged")
+        try:
+            confab_total = int(_raw_total) if _raw_total is not None else 0
+        except (TypeError, ValueError):
+            confab_total = 0
+    except Exception as exc:  # state backend unavailable -- non-fatal
+        click.echo(f"  [INFO] confab counters unavailable: {exc}", err=True)
+
     all_ok = True
     for name, surgeon_cfg in [
         ("Cardiologist", config.cardiologist),
         ("Neurologist", config.neurologist),
     ]:
+        confab_n = confab_counts.get(name.lower(), 0)
+        confab_suffix = f" [confab flags: {confab_n}]"
         # Step 1: Check if API key is needed and present
         is_local = surgeon_cfg.provider in ("ollama", "mlx", "local", "vllm", "lmstudio")
         if not is_local and not surgeon_cfg.get_api_key():
             env_var = surgeon_cfg.api_key_env or "(not configured)"
-            click.echo(f"  {name}: FAIL -- API key missing. Set {env_var} env var.")
+            click.echo(f"  {name}: FAIL -- API key missing. Set {env_var} env var.{confab_suffix}")
             all_ok = False
             continue
 
@@ -264,12 +286,12 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
         except (httpx.ConnectError, httpx.TimeoutException):
             click.echo(
                 f"  {name}: FAIL -- endpoint unreachable ({endpoint}). "
-                f"Is your {surgeon_cfg.provider} server running?"
+                f"Is your {surgeon_cfg.provider} server running?{confab_suffix}"
             )
             all_ok = False
             continue
         except Exception as exc:
-            click.echo(f"  {name}: FAIL -- endpoint error: {exc}")
+            click.echo(f"  {name}: FAIL -- endpoint error: {exc}{confab_suffix}")
             all_ok = False
             continue
 
@@ -295,15 +317,16 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
             resp = provider.ping(timeout_s=10.0)
             if resp.ok:
                 status = "OK" if model_found else "OK (model responded but not in /models list)"
-                click.echo(f"  {name}: {status} ({resp.latency_ms}ms)")
+                click.echo(f"  {name}: {status} ({resp.latency_ms}ms){confab_suffix}")
             else:
-                click.echo(f"  {name}: FAIL -- endpoint reachable but query failed: {resp.content[:100]}")
+                click.echo(f"  {name}: FAIL -- endpoint reachable but query failed: {resp.content[:100]}{confab_suffix}")
                 all_ok = False
         except Exception as exc:
-            click.echo(f"  {name}: FAIL -- {exc}")
+            click.echo(f"  {name}: FAIL -- {exc}{confab_suffix}")
             all_ok = False
 
     click.echo(f"\nAtlas (Claude): always available (this session)")
+    click.echo(f"Confabulation flags (cumulative): total={confab_total}")
 
     if not all_ok:
         click.echo("\nSome surgeons unreachable. Run '3s init' to reconfigure.")
