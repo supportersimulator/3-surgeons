@@ -19,6 +19,7 @@ from typing import List, Optional, Protocol
 
 from three_surgeons.adapters._protocol import SurgeryAdapter
 from three_surgeons.adapters._standalone import StandaloneAdapter
+from three_surgeons.core.confabulation_detector import detect_confabulation
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.file_access import AccessOutcome, FileAccessPolicy, read_files_with_budget, wrap_file_content
 from three_surgeons.core.sessions import LiveSession
@@ -118,6 +119,7 @@ class CrossExamResult:
     mode_used: str = "single"
     escalation_needed: bool = False
     unresolved_summary: Optional[str] = None
+    confabulation_flags: dict = field(default_factory=dict)
 
     @property
     def surgeon_count(self) -> int:
@@ -141,6 +143,7 @@ class ConsensusResult:
     cardiologist_assessment: str = "unavailable"
     weighted_score: float = 0.0
     total_cost: float = 0.0
+    confabulation_flags: dict = field(default_factory=dict)
 
 
 # ── Prompt Templates ─────────────────────────────────────────────────
@@ -279,6 +282,18 @@ class SurgeryTeam:
             result.warnings.append("Cardiologist (remote LLM) unreachable — consulting with neurologist only.")
         if neuro_resp is None:
             result.warnings.append("Neurologist (local LLM) unreachable — consulting with cardiologist only.")
+
+        # Confabulation regression check (RACE M2)
+        cardio_flag = self._check_confabulation(
+            "cardiologist", topic, result.cardiologist_report, result.warnings
+        )
+        neuro_flag = self._check_confabulation(
+            "neurologist", topic, result.neurologist_report, result.warnings
+        )
+        if cardio_flag:
+            result.confabulation_flags["cardiologist"] = cardio_flag
+        if neuro_flag:
+            result.confabulation_flags["neurologist"] = neuro_flag
 
         # Log to evidence store
         self._log_cross_exam(result)
@@ -468,6 +483,18 @@ class SurgeryTeam:
                     "cardiologist", synth_resp.cost_usd, "cross_examine_synth"
                 )
 
+        # ── Confabulation regression check (RACE M2) ──────────────────
+        cardio_flag = self._check_confabulation(
+            "cardiologist", topic, result.cardiologist_report, result.warnings
+        )
+        neuro_flag = self._check_confabulation(
+            "neurologist", topic, result.neurologist_report, result.warnings
+        )
+        if cardio_flag:
+            result.confabulation_flags["cardiologist"] = cardio_flag
+        if neuro_flag:
+            result.confabulation_flags["neurologist"] = neuro_flag
+
         # Log to evidence store
         self._log_cross_exam(result)
 
@@ -600,12 +627,18 @@ class SurgeryTeam:
             max_tokens=256,
             temperature=0.2,
         )
+        warnings: List[str] = []
         if cardio_resp:
             result.total_cost += cardio_resp.cost_usd
             self._track_cost("cardiologist", cardio_resp.cost_usd, "consensus")
             parsed = self._parse_consensus_json(cardio_resp.content)
             result.cardiologist_confidence = parsed["confidence"]
             result.cardiologist_assessment = parsed["assessment"]
+            cardio_flag = self._check_confabulation(
+                "cardiologist", claim, cardio_resp.content, warnings
+            )
+            if cardio_flag:
+                result.confabulation_flags["cardiologist"] = cardio_flag
 
         # Query neurologist
         neuro_resp = self._safe_query(
@@ -621,6 +654,11 @@ class SurgeryTeam:
             parsed = self._parse_consensus_json(neuro_resp.content)
             result.neurologist_confidence = parsed["confidence"]
             result.neurologist_assessment = parsed["assessment"]
+            neuro_flag = self._check_confabulation(
+                "neurologist", claim, neuro_resp.content, warnings
+            )
+            if neuro_flag:
+                result.confabulation_flags["neurologist"] = neuro_flag
 
         # Calculate weighted consensus score
         result.weighted_score = self._calculate_weighted_score(result)
@@ -1170,6 +1208,42 @@ class SurgeryTeam:
         if cost_usd > 0:
             self._evidence.track_cost(surgeon, cost_usd, operation)
         self._adapter.on_cost(surgeon, cost_usd, operation)
+
+    def _check_confabulation(
+        self,
+        surgeon: str,
+        question: str,
+        answer: Optional[str],
+        warnings: List[str],
+    ) -> Optional[dict]:
+        """Run confab detector on a surgeon answer.
+
+        Side effects when confidence > 0.5:
+          - Append warning to `warnings`.
+          - Log a warning.
+          - Increment a counter on the state backend so regressions show up
+            in dashboards.
+
+        Returns the report dict (or None if there was no answer).
+        """
+        if not answer:
+            return None
+        report = detect_confabulation(question, answer)
+        if not report.confabulated:
+            return None
+        msg = (
+            f"Confabulation suspected in {surgeon} answer "
+            f"(confidence={report.confidence:.2f}, "
+            f"signals={report.signals})"
+        )
+        warnings.append(msg)
+        logger.warning(msg)
+        try:
+            self._state.increment("confab:total_flagged")
+            self._state.increment(f"confab:by_surgeon:{surgeon}")
+        except Exception as exc:  # pragma: no cover - state backend issues
+            logger.warning("Failed to increment confab counter: %s", exc)
+        return report.to_dict()
 
     def _log_cross_exam(self, result: CrossExamResult) -> None:
         """Log a cross-exam result to the evidence store."""
