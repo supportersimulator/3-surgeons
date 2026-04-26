@@ -133,6 +133,21 @@ class CrossExamResult:
 
 
 @dataclass
+class _QueryOutcome:
+    """Internal result of `_query_with_confab_retry`.
+
+    text: final user-facing surgeon answer (None if the call failed).
+    flag: confab report dict if the FINAL text is still confabulated.
+    cost_usd / latency_ms: cumulative across initial call + retry.
+    """
+
+    text: Optional[str] = None
+    flag: Optional[dict] = None
+    cost_usd: float = 0.0
+    latency_ms: float = 0.0
+
+
+@dataclass
 class ConsensusResult:
     """Result from a consensus (confidence-weighted vote) operation."""
 
@@ -247,59 +262,61 @@ class SurgeryTeam:
 
         No cross-examination or synthesis -- just independent opinions.
         Logs result in evidence store.
+
+        RACE R2: when the initial answer is flagged as confabulated, the
+        surgeon is automatically retried ONCE with a stricter system prompt
+        that names the offending signals. The clean retry replaces the
+        confabulated answer; if the retry still confabulates the original
+        answer is kept and a WARNING marker is attached.
         """
         file_context = _read_file_context(file_paths)
         if file_context:
             topic = f"{topic}\n\n{file_context}"
         result = CrossExamResult(topic=topic)
 
-        # Query cardiologist
-        cardio_resp = self._safe_query(
-            self._cardiologist,
+        # Cardiologist (with auto-retry on confab)
+        cardio_outcome = self._query_with_confab_retry(
+            provider=self._cardiologist,
+            surgeon="cardiologist",
             system=_CONSULT_SYSTEM.format(role="cardiologist"),
             prompt=topic,
+            question_for_detection=topic,
+            cost_op="consult",
+            warnings=result.warnings,
         )
-        if cardio_resp is not None:
-            result.cardiologist_report = cardio_resp.content
-            result.total_cost += cardio_resp.cost_usd
-            result.total_latency_ms += cardio_resp.latency_ms
-            self._track_cost("cardiologist", cardio_resp.cost_usd, "consult")
+        result.cardiologist_report = cardio_outcome.text
+        result.total_cost += cardio_outcome.cost_usd
+        result.total_latency_ms += cardio_outcome.latency_ms
+        if cardio_outcome.flag:
+            result.confabulation_flags["cardiologist"] = cardio_outcome.flag
+            result.cardiologist_report = self._attach_confab_marker(
+                result.cardiologist_report, cardio_outcome.flag
+            )
 
-        # Query neurologist
-        neuro_resp = self._safe_query(
-            self._neurologist,
+        # Neurologist (with auto-retry on confab)
+        neuro_outcome = self._query_with_confab_retry(
+            provider=self._neurologist,
+            surgeon="neurologist",
             system=_CONSULT_SYSTEM.format(role="neurologist"),
             prompt=topic,
+            question_for_detection=topic,
+            cost_op="consult",
+            warnings=result.warnings,
         )
-        if neuro_resp is not None:
-            result.neurologist_report = neuro_resp.content
-            result.total_cost += neuro_resp.cost_usd
-            result.total_latency_ms += neuro_resp.latency_ms
-            self._track_cost("neurologist", neuro_resp.cost_usd, "consult")
+        result.neurologist_report = neuro_outcome.text
+        result.total_cost += neuro_outcome.cost_usd
+        result.total_latency_ms += neuro_outcome.latency_ms
+        if neuro_outcome.flag:
+            result.confabulation_flags["neurologist"] = neuro_outcome.flag
+            result.neurologist_report = self._attach_confab_marker(
+                result.neurologist_report, neuro_outcome.flag
+            )
 
         # Degradation warnings
-        if cardio_resp is None:
+        if cardio_outcome.text is None:
             result.warnings.append("Cardiologist (remote LLM) unreachable — consulting with neurologist only.")
-        if neuro_resp is None:
+        if neuro_outcome.text is None:
             result.warnings.append("Neurologist (local LLM) unreachable — consulting with cardiologist only.")
-
-        # Confabulation regression check (RACE M2)
-        cardio_flag = self._check_confabulation(
-            "cardiologist", topic, result.cardiologist_report, result.warnings
-        )
-        neuro_flag = self._check_confabulation(
-            "neurologist", topic, result.neurologist_report, result.warnings
-        )
-        if cardio_flag:
-            result.confabulation_flags["cardiologist"] = cardio_flag
-            result.cardiologist_report = self._attach_confab_marker(
-                result.cardiologist_report, cardio_flag
-            )
-        if neuro_flag:
-            result.confabulation_flags["neurologist"] = neuro_flag
-            result.neurologist_report = self._attach_confab_marker(
-                result.neurologist_report, neuro_flag
-            )
 
         # Log to evidence store
         self._log_cross_exam(result)
@@ -326,41 +343,43 @@ class SurgeryTeam:
             topic = f"{topic}\n\n{file_context}"
         result = CrossExamResult(topic=topic)
 
-        # ── Phase 1: Independent analysis ────────────────────────────
-        cardio_initial = self._safe_query(
-            self._cardiologist,
+        # ── Phase 1: Independent analysis (with auto-retry on confab) ─
+        cardio_outcome = self._query_with_confab_retry(
+            provider=self._cardiologist,
+            surgeon="cardiologist",
             system=_CONSULT_SYSTEM.format(role="cardiologist"),
             prompt=topic,
+            question_for_detection=topic,
+            cost_op="cross_examine_p1",
+            warnings=result.warnings,
         )
-        neuro_initial = self._safe_query(
-            self._neurologist,
+        neuro_outcome = self._query_with_confab_retry(
+            provider=self._neurologist,
+            surgeon="neurologist",
             system=_CONSULT_SYSTEM.format(role="neurologist"),
             prompt=topic,
+            question_for_detection=topic,
+            cost_op="cross_examine_p1",
+            warnings=result.warnings,
         )
 
-        cardio_text = cardio_initial.content if cardio_initial else None
-        neuro_text = neuro_initial.content if neuro_initial else None
+        cardio_text = cardio_outcome.text
+        neuro_text = neuro_outcome.text
 
-        # Accumulate cost/latency from phase 1
-        if cardio_initial:
-            result.total_cost += cardio_initial.cost_usd
-            result.total_latency_ms += cardio_initial.latency_ms
-            self._track_cost("cardiologist", cardio_initial.cost_usd, "cross_examine_p1")
-        if neuro_initial:
-            result.total_cost += neuro_initial.cost_usd
-            result.total_latency_ms += neuro_initial.latency_ms
-            self._track_cost("neurologist", neuro_initial.cost_usd, "cross_examine_p1")
+        # Accumulate cost/latency from phase 1 (includes any retry)
+        result.total_cost += cardio_outcome.cost_usd + neuro_outcome.cost_usd
+        result.total_latency_ms += cardio_outcome.latency_ms + neuro_outcome.latency_ms
 
         # ── Degradation warnings ──────────────────────────────────────
-        if cardio_initial is None:
+        if cardio_text is None:
             msg = "Cardiologist (remote LLM) unreachable — proceeding without. Run '3s probe' for details."
             result.warnings.append(msg)
             logger.warning(msg)
-        if neuro_initial is None:
+        if neuro_text is None:
             msg = "Neurologist (local LLM) unreachable — proceeding without. Run '3s probe' for details."
             result.warnings.append(msg)
             logger.warning(msg)
-        if cardio_initial is None and neuro_initial is None:
+        if cardio_text is None and neuro_text is None:
             msg = "Both surgeons unreachable — cross-examination has no external input."
             result.warnings.append(msg)
             logger.error(msg)
@@ -489,23 +508,30 @@ class SurgeryTeam:
                     "cardiologist", synth_resp.cost_usd, "cross_examine_synth"
                 )
 
-        # ── Confabulation regression check (RACE M2) ──────────────────
+        # ── Confabulation regression check (RACE M2 / R2) ─────────────
+        # Counters were already incremented in Phase 1 auto-retry. Re-check
+        # here purely so the synthesis banner reflects the FINAL surgeon
+        # text (which may include the cross-review tail).
         cardio_flag = self._check_confabulation(
-            "cardiologist", topic, result.cardiologist_report, result.warnings
+            "cardiologist", topic, result.cardiologist_report,
+            result.warnings, increment_counter=False,
         )
         neuro_flag = self._check_confabulation(
-            "neurologist", topic, result.neurologist_report, result.warnings
+            "neurologist", topic, result.neurologist_report,
+            result.warnings, increment_counter=False,
         )
         if cardio_flag:
             result.confabulation_flags["cardiologist"] = cardio_flag
-            result.cardiologist_report = self._attach_confab_marker(
-                result.cardiologist_report, cardio_flag
-            )
+            if "[WARNING] Confabulation flag" not in (result.cardiologist_report or ""):
+                result.cardiologist_report = self._attach_confab_marker(
+                    result.cardiologist_report, cardio_flag
+                )
         if neuro_flag:
             result.confabulation_flags["neurologist"] = neuro_flag
-            result.neurologist_report = self._attach_confab_marker(
-                result.neurologist_report, neuro_flag
-            )
+            if "[WARNING] Confabulation flag" not in (result.neurologist_report or ""):
+                result.neurologist_report = self._attach_confab_marker(
+                    result.neurologist_report, neuro_flag
+                )
 
         # Synthesis is what most subagent flows surface to the caller; if
         # either surgeon was flagged the synthesis is contaminated, so prepend
@@ -1236,12 +1262,163 @@ class SurgeryTeam:
             self._evidence.track_cost(surgeon, cost_usd, operation)
         self._adapter.on_cost(surgeon, cost_usd, operation)
 
+    # ── Auto-retry on confabulation (RACE R2) ───────────────────────
+
+    def _build_anti_confab_system(
+        self, base_system: str, signals: List[str]
+    ) -> str:
+        """Prepend a stricter directive that names confabulated patterns."""
+        if signals:
+            joined = ", ".join(sorted({str(s) for s in signals}))
+            avoid = (
+                "AVOID the following confabulation patterns from your prior "
+                f"draft: {joined}. Do not introduce out-of-domain jargon, "
+                "fabricated citations, or unrelated technical concepts. "
+                "Stay strictly within the question's domain.\n\n"
+            )
+        else:
+            avoid = (
+                "AVOID confabulation: do not introduce out-of-domain jargon, "
+                "fabricated citations, or unrelated technical concepts. "
+                "Stay strictly within the question's domain.\n\n"
+            )
+        return avoid + base_system
+
+    def _query_with_confab_retry(
+        self,
+        provider: LLMProviderLike,
+        surgeon: str,
+        system: str,
+        prompt: str,
+        question_for_detection: str,
+        cost_op: str,
+        warnings: List[str],
+    ) -> "_QueryOutcome":
+        """Query a surgeon, auto-retry ONCE if the answer is confabulated.
+
+        Returns _QueryOutcome with the final text, the surviving confab flag
+        (None if clean), and the accumulated cost / latency across the
+        original + optional retry.
+
+        Counters:
+          - confab:auto_retries_attempted     incremented when a retry runs
+          - confab:auto_retries_successful    incremented when retry is clean
+          - confab:auto_retries_still_failed  incremented when retry stays bad
+          - confab:total_flagged / by_surgeon: incremented ONLY when the
+            final, post-retry answer is still flagged (so a successful
+            retry does not pollute the regression dashboard)
+
+        The original answer is preserved if the retry is still flagged so
+        callers see *something* (with a WARNING marker). The retry never
+        recurses -- we deliberately stop after one attempt to bound cost.
+        """
+        outcome = _QueryOutcome()
+
+        first = self._safe_query(provider, system=system, prompt=prompt)
+        if first is None:
+            return outcome  # text=None, flag=None, cost=0, latency=0
+
+        outcome.text = first.content
+        outcome.cost_usd += first.cost_usd
+        outcome.latency_ms += first.latency_ms
+        self._track_cost(surgeon, first.cost_usd, cost_op)
+
+        report = detect_confabulation(question_for_detection, first.content)
+        if not report.confabulated:
+            return outcome  # clean on first try
+
+        # ── Retry once with stricter prompt ──────────────────────────
+        try:
+            self._state.increment("confab:auto_retries_attempted")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to increment auto_retries_attempted: %s", exc)
+
+        stricter_system = self._build_anti_confab_system(system, report.signals)
+        retry = self._safe_query(provider, system=stricter_system, prompt=prompt)
+        if retry is None:
+            # Retry call itself failed — surface original + flag.
+            outcome.flag = self._record_persistent_confab(
+                surgeon, question_for_detection, first.content, warnings
+            )
+            try:
+                self._state.increment("confab:auto_retries_still_failed")
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Failed to increment auto_retries_still_failed: %s", exc)
+            return outcome
+
+        outcome.cost_usd += retry.cost_usd
+        outcome.latency_ms += retry.latency_ms
+        self._track_cost(surgeon, retry.cost_usd, f"{cost_op}_retry")
+
+        retry_report = detect_confabulation(question_for_detection, retry.content)
+        if not retry_report.confabulated:
+            # Clean retry — replace original with retry text.
+            outcome.text = retry.content
+            try:
+                self._state.increment("confab:auto_retries_successful")
+            except Exception as exc:  # pragma: no cover
+                logger.warning("Failed to increment auto_retries_successful: %s", exc)
+            logger.info(
+                "Confabulation auto-retry succeeded for %s (signals cleared)",
+                surgeon,
+            )
+            return outcome
+
+        # Retry still confabulated -- keep ORIGINAL answer + warning marker.
+        try:
+            self._state.increment("confab:auto_retries_still_failed")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to increment auto_retries_still_failed: %s", exc)
+        outcome.flag = self._record_persistent_confab(
+            surgeon, question_for_detection, first.content, warnings
+        )
+        # Note: we keep `first.content` (not `retry.content`) so callers see
+        # the highest-quality available answer; both are confabulated, but
+        # the original was produced under normal conditions.
+        outcome.text = first.content
+        warnings.append(
+            f"Confabulation auto-retry on {surgeon} still confabulated — "
+            "returning original answer with WARNING marker."
+        )
+        return outcome
+
+    def _record_persistent_confab(
+        self,
+        surgeon: str,
+        question: str,
+        answer: str,
+        warnings: List[str],
+    ) -> Optional[dict]:
+        """Build the flag dict + bump the regression counters once.
+
+        Mirrors the side effects of `_check_confabulation` but is called from
+        the auto-retry path (to avoid double-counting once the legacy
+        post-detection block re-runs).
+        """
+        report = detect_confabulation(question, answer)
+        if not report.confabulated:
+            return None
+        msg = (
+            f"Confabulation suspected in {surgeon} answer "
+            f"(confidence={report.confidence:.2f}, "
+            f"signals={report.signals})"
+        )
+        warnings.append(msg)
+        logger.warning(msg)
+        try:
+            self._state.increment("confab:total_flagged")
+            self._state.increment(f"confab:by_surgeon:{surgeon}")
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Failed to increment confab counter: %s", exc)
+        return report.to_dict()
+
     def _check_confabulation(
         self,
         surgeon: str,
         question: str,
         answer: Optional[str],
         warnings: List[str],
+        increment_counter: bool = True,
     ) -> Optional[dict]:
         """Run confab detector on a surgeon answer.
 
@@ -1249,7 +1426,8 @@ class SurgeryTeam:
           - Append warning to `warnings`.
           - Log a warning.
           - Increment a counter on the state backend so regressions show up
-            in dashboards.
+            in dashboards (controlled by `increment_counter` so callers that
+            already paid the counter cost via auto-retry don't double-count).
 
         Returns the report dict (or None if there was no answer).
         """
@@ -1265,11 +1443,12 @@ class SurgeryTeam:
         )
         warnings.append(msg)
         logger.warning(msg)
-        try:
-            self._state.increment("confab:total_flagged")
-            self._state.increment(f"confab:by_surgeon:{surgeon}")
-        except Exception as exc:  # pragma: no cover - state backend issues
-            logger.warning("Failed to increment confab counter: %s", exc)
+        if increment_counter:
+            try:
+                self._state.increment("confab:total_flagged")
+                self._state.increment(f"confab:by_surgeon:{surgeon}")
+            except Exception as exc:  # pragma: no cover - state backend issues
+                logger.warning("Failed to increment confab counter: %s", exc)
         return report.to_dict()
 
     @staticmethod
