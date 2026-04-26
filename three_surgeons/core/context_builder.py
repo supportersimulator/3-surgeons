@@ -30,7 +30,7 @@ def _probe_llm_health(config: Config, timeout_s: float = 5.0) -> List[LLMProvide
         ("neurologist", config.neurologist),
     ]:
         try:
-            provider = LLMProvider(surgeon_cfg)
+            provider = LLMProvider(surgeon_cfg, fallbacks=surgeon_cfg.get_fallback_configs())
             resp = provider.ping(timeout_s=timeout_s)
             if resp.ok:
                 healthy.append(provider)

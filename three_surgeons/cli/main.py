@@ -20,14 +20,32 @@ from three_surgeons.core.state import create_backend_from_config
 
 
 def _make_neuro(config: Config) -> LLMProvider:
-    """Create neurologist LLMProvider with GPU lock for local providers."""
+    """Create neurologist LLMProvider with GPU lock for local providers.
+
+    Threads ``fallbacks=`` from the neurologist's YAML so a primary failure
+    (timeout, 429, etc.) automatically retries against the configured backup
+    chain. Without this, the fallback machinery in :class:`LLMProvider` is
+    dead code -- the surgeon goes offline on any transient primary failure.
+    """
+    fallbacks = config.neurologist.get_fallback_configs()
     if config.neurologist.provider in ("ollama", "mlx", "local", "vllm", "lmstudio"):
         from three_surgeons.core.priority_queue import make_gpu_locked_adapter
 
         lock_dir = Path(config.gpu_lock_path) if config.gpu_lock_path else None
         adapter = make_gpu_locked_adapter(config.neurologist, lock_dir=lock_dir)
-        return LLMProvider(config.neurologist, query_adapter=adapter)
-    return LLMProvider(config.neurologist)
+        return LLMProvider(config.neurologist, query_adapter=adapter, fallbacks=fallbacks)
+    return LLMProvider(config.neurologist, fallbacks=fallbacks)
+
+
+def _make_cardio(config: Config) -> LLMProvider:
+    """Create cardiologist LLMProvider with fallback chain wired through.
+
+    Cardio is typically OpenAI; on a billing 429 or transient HTTP error the
+    fallback chain (e.g. DeepSeek) keeps the surgeon online. Centralising
+    construction here ensures every CLI command participates in self-healing.
+    """
+    fallbacks = config.cardiologist.get_fallback_configs()
+    return LLMProvider(config.cardiologist, fallbacks=fallbacks)
 
 
 def _detect_ides() -> list[str]:
@@ -291,7 +309,7 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
 
         # Step 4: Test actual LLM call
         try:
-            provider = LLMProvider(surgeon_cfg)
+            provider = LLMProvider(surgeon_cfg, fallbacks=surgeon_cfg.get_fallback_configs())
             resp = provider.ping(timeout_s=10.0)
             if resp.ok:
                 status = "OK" if model_found else "OK (model responded but not in /models list)"
@@ -454,7 +472,7 @@ def setup_check(ctx: click.Context) -> None:
         # Ping check (only if reachable and key is available)
         if info["reachable"] and (is_local or info["api_key_set"]):
             try:
-                provider = LLMProvider(surgeon_cfg)
+                provider = LLMProvider(surgeon_cfg, fallbacks=surgeon_cfg.get_fallback_configs())
                 ping = provider.ping(timeout_s=10.0)
                 info["ping_ok"] = ping.ok
                 if ping.ok:
@@ -706,7 +724,7 @@ def cross_exam(ctx: click.Context, topic: str, review_mode: Optional[str], files
     config: Config = ctx.obj["config"]
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     neuro = _make_neuro(config)
     team = SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
@@ -953,7 +971,7 @@ def consult(ctx: click.Context, topic: str, files: tuple, dry_run: bool) -> None
     config: Config = ctx.obj["config"]
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     neuro = _make_neuro(config)
     team = SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
@@ -999,7 +1017,7 @@ def consensus(ctx: click.Context, claim: str, dry_run: bool) -> None:
     config: Config = ctx.obj["config"]
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     neuro = _make_neuro(config)
     team = SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
@@ -1179,7 +1197,7 @@ def introspect_cmd(ctx: click.Context) -> None:
     providers = {}
     for name, cfg in [("cardiologist", config.cardiologist), ("neurologist", config.neurologist)]:
         try:
-            providers[name] = LLMProvider(cfg)
+            providers[name] = LLMProvider(cfg, fallbacks=cfg.get_fallback_configs())
         except Exception:
             pass
 
@@ -1240,7 +1258,7 @@ def ask_remote_cmd(ctx: click.Context, prompt: str, dry_run: bool) -> None:
     from three_surgeons.core.direct import ask_remote
 
     config: Config = ctx.obj["config"]
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     resp = ask_remote(prompt, cardio)
 
     if resp.ok:
@@ -1274,7 +1292,7 @@ def cardio_review_cmd(ctx: click.Context, topic: str, git_context: str, files: t
     config: Config = ctx.obj["config"]
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     neuro = _make_neuro(config)
     team = SurgeryTeam(cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state)
 
@@ -1311,7 +1329,7 @@ def ab_validate_cmd(ctx: click.Context, description: str) -> None:
     config: Config = ctx.obj["config"]
     state = create_backend_from_config(config.state)
     evidence = EvidenceStore(str(config.evidence.resolved_path))
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     neuro = _make_neuro(config)
     team = SurgeryTeam(cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state)
 
@@ -1344,7 +1362,7 @@ def research_cmd(ctx: click.Context, topic: str, dry_run: bool) -> None:
     from three_surgeons.core.research import research
 
     config: Config = ctx.obj["config"]
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
 
     click.echo(f"Researching: {topic}\n")
     result = research(topic, cardio)

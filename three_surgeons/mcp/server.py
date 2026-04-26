@@ -67,7 +67,13 @@ def _get_neuro(config: Config) -> LLMProvider:
 
 
 def _make_neuro(config: Config) -> LLMProvider:
-    """Create neurologist LLMProvider with GPU lock for local providers."""
+    """Create neurologist LLMProvider with GPU lock for local providers.
+
+    Threads ``fallbacks=`` from the neurologist's YAML so a primary failure
+    automatically falls through to the configured backup chain. Without
+    this the fallback path in ``LLMProvider.query`` is unreachable.
+    """
+    fallbacks = config.neurologist.get_fallback_configs()
     # ContextDNA ecosystem: use priority queue adapter (Redis GPU lock + hybrid routing)
     if os.environ.get("CONTEXTDNA_ADAPTER"):
         try:
@@ -78,7 +84,7 @@ def _make_neuro(config: Config) -> LLMProvider:
                 caller="3surgeons_neuro",
             )
             logger.info("Using ContextDNA priority queue adapter for neurologist")
-            return LLMProvider(config.neurologist, query_adapter=adapter)
+            return LLMProvider(config.neurologist, query_adapter=adapter, fallbacks=fallbacks)
         except ImportError:
             logger.warning(
                 "CONTEXTDNA_ADAPTER set but context_dna.adapters not importable; "
@@ -93,8 +99,19 @@ def _make_neuro(config: Config) -> LLMProvider:
 
         lock_dir = Path(config.gpu_lock_path) if config.gpu_lock_path else None
         adapter = make_gpu_locked_adapter(config.neurologist, lock_dir=lock_dir)
-        return LLMProvider(config.neurologist, query_adapter=adapter)
-    return LLMProvider(config.neurologist)
+        return LLMProvider(config.neurologist, query_adapter=adapter, fallbacks=fallbacks)
+    return LLMProvider(config.neurologist, fallbacks=fallbacks)
+
+
+def _make_cardio(config: Config) -> LLMProvider:
+    """Create cardiologist LLMProvider with fallback chain wired through.
+
+    Cardio is the external surgeon (typically OpenAI). On 429/5xx the wired
+    fallback chain (e.g. DeepSeek) keeps the surgeon online instead of
+    taking the whole consensus offline.
+    """
+    fallbacks = config.cardiologist.get_fallback_configs()
+    return LLMProvider(config.cardiologist, fallbacks=fallbacks)
 
 # ── Tool registry ───────────────────────────────────────────────────────
 
@@ -155,7 +172,7 @@ def _build_surgery_team(
         config = _build_config()
     state = _build_state()
     evidence = _build_evidence(config)
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     neuro = _get_neuro(config)
     return SurgeryTeam(
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
@@ -184,7 +201,7 @@ def _probe() -> dict:
         ("neurologist", config.neurologist),
     ]:
         try:
-            provider = LLMProvider(surgeon_cfg)
+            provider = LLMProvider(surgeon_cfg, fallbacks=surgeon_cfg.get_fallback_configs())
             resp = provider.ping(timeout_s=5.0)
             if resp.ok:
                 results[name] = {
@@ -490,7 +507,7 @@ def _introspect_impl() -> dict:
     providers = {}
     warnings: list[str] = []
     try:
-        providers["cardiologist"] = LLMProvider(config.cardiologist)
+        providers["cardiologist"] = _make_cardio(config)
     except Exception as exc:
         logger.warning("Cardiologist unavailable for introspect: %s", exc)
         warnings.append(f"Cardiologist unavailable: {exc}")
@@ -529,7 +546,7 @@ def _ask_local_impl(prompt: str) -> dict:
 def _ask_remote_impl(prompt: str) -> dict:
     """Direct query to the cardiologist."""
     config = _build_config()
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     resp = ask_remote(prompt, cardio)
     return {"operation": "ask_remote", "_surgeon": "cardiologist", "ok": resp.ok, "content": resp.content, "cost_usd": resp.cost_usd, "warnings": []}
 
@@ -575,7 +592,7 @@ def _ab_validate_impl(description: str) -> dict:
 def _research_impl(topic: str) -> dict:
     """Self-directed research."""
     config = _build_config()
-    cardio = LLMProvider(config.cardiologist)
+    cardio = _make_cardio(config)
     result = research_fn(topic, cardio)
     return {
         "operation": "research",

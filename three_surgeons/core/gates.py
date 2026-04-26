@@ -140,7 +140,8 @@ class GainsGate:
         try:
             from three_surgeons.core.models import LLMProvider
 
-            provider = LLMProvider(self._config.neurologist)
+            neuro_cfg = self._config.neurologist
+            provider = LLMProvider(neuro_cfg, fallbacks=neuro_cfg.get_fallback_configs())
             resp = provider.ping(timeout_s=3.0)
             if resp.ok:
                 return CheckResult(
@@ -168,7 +169,8 @@ class GainsGate:
         try:
             from three_surgeons.core.models import LLMProvider
 
-            provider = LLMProvider(self._config.cardiologist)
+            cardio_cfg = self._config.cardiologist
+            provider = LLMProvider(cardio_cfg, fallbacks=cardio_cfg.get_fallback_configs())
             resp = provider.ping(timeout_s=3.0)
             if resp.ok:
                 return CheckResult(
@@ -290,7 +292,8 @@ class GainsGate:
         try:
             from three_surgeons.core.models import LLMProvider
 
-            provider = LLMProvider(self._config.neurologist)
+            neuro_cfg = self._config.neurologist
+            provider = LLMProvider(neuro_cfg, fallbacks=neuro_cfg.get_fallback_configs())
             resp = provider.query(
                 system="Respond with OK.",
                 prompt="Health check",
