@@ -9,10 +9,28 @@
 
 set -euo pipefail
 
-# Load API keys from macOS Keychain if available (values never logged)
+# Load API keys from macOS Keychain if available (values never logged).
+# Cardiologist provider is selectable in user YAML (~/.3surgeons/config.yaml).
+# When provider=deepseek, the key in keychain item `3surgeons-cardiologist`
+# is exported under every env var name the config layer accepts:
+#   - Context_DNA_OPENAI         (legacy / default OpenAI preset)
+#   - Context_DNA_Deep_Seek      (user YAML api_key_env, dual-underscore)
+#   - Context_DNA_Deepseek       (3-Surgeons preset api_key_env)
+#   - DEEPSEEK_API_KEY           (canonical fallback in SurgeonConfig.get_api_key)
+# This lets the same keychain item serve both OpenAI and DeepSeek configs
+# without per-provider keychain churn.
 if command -v security &>/dev/null; then
-  _k=$(security find-generic-password -s 3surgeons-cardiologist -w 2>/dev/null) && export Context_DNA_OPENAI="$_k"
-  _k=$(security find-generic-password -s 3surgeons-neurologist -w 2>/dev/null) && export Context_DNA_Deepseek="$_k"
+  if _k=$(security find-generic-password -s 3surgeons-cardiologist -w 2>/dev/null); then
+    export Context_DNA_OPENAI="$_k"
+    export Context_DNA_Deep_Seek="$_k"
+    export Context_DNA_Deepseek="$_k"
+    [ -z "${DEEPSEEK_API_KEY:-}" ] && export DEEPSEEK_API_KEY="$_k"
+  fi
+  if _k=$(security find-generic-password -s 3surgeons-neurologist -w 2>/dev/null); then
+    export Context_DNA_Deepseek="${Context_DNA_Deepseek:-$_k}"
+    export Context_DNA_Deep_Seek="${Context_DNA_Deep_Seek:-$_k}"
+    [ -z "${DEEPSEEK_API_KEY:-}" ] && export DEEPSEEK_API_KEY="$_k"
+  fi
   unset _k
 fi
 
