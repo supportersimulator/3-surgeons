@@ -249,6 +249,45 @@ def _patch_neurologist_from_detection(config_path: Path, detected: dict) -> None
 # -- probe ------------------------------------------------------------------
 
 
+def _bootstrap_api_key_from_keychain(env_var: str) -> bool:
+    """Populate ``os.environ[env_var]`` from macOS keychain if missing.
+
+    Returns True when the key is present in the environment after the call
+    (either was already set or was successfully fetched). False when no
+    keychain item exists or the platform is not macOS.
+
+    Tries the requested env-var name first, then falls back to
+    ``DEEPSEEK_API_KEY`` so deepseek probes succeed when the user only
+    stores the canonical name. Silent on failure — keychain is a
+    best-effort convenience, callers still validate via ``get_api_key()``.
+    """
+    import os
+    import shutil
+    import subprocess
+
+    if not env_var:
+        return False
+    if os.environ.get(env_var):
+        return True
+    if shutil.which("security") is None:
+        return False
+    candidates = [env_var]
+    if env_var != "DEEPSEEK_API_KEY":
+        candidates.append("DEEPSEEK_API_KEY")
+    for name in candidates:
+        try:
+            value = subprocess.run(
+                ["security", "find-generic-password", "-s", name, "-w"],
+                capture_output=True, text=True, timeout=3.0,
+            ).stdout.strip()
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+        if value and len(value) >= 6:
+            os.environ[env_var] = value
+            return True
+    return False
+
+
 @cli.command()
 @click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
 @click.pass_context
@@ -259,6 +298,9 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
         result = check_dry_run("probe", {})
         click.echo(json.dumps(result.to_dict(), indent=2))
         return
+
+    import socket
+    from urllib.parse import urlparse
 
     import httpx
 
@@ -273,23 +315,47 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
         # Step 1: Check if API key is needed and present
         is_local = surgeon_cfg.provider in ("ollama", "mlx", "local", "vllm", "lmstudio")
         if not is_local and not surgeon_cfg.get_api_key():
+            # Try to self-bootstrap from macOS keychain before failing.
+            _bootstrap_api_key_from_keychain(surgeon_cfg.api_key_env)
+        if not is_local and not surgeon_cfg.get_api_key():
             env_var = surgeon_cfg.api_key_env or "(not configured)"
             click.echo(f"  {name}: FAIL -- API key missing. Set {env_var} env var.")
             all_ok = False
             continue
 
-        # Step 2: Check endpoint reachability
+        # Step 2: Check endpoint reachability.
+        # Local LLM servers (mlx, ollama) sometimes block the HTTP loop while
+        # loading or generating, which makes /v1/models hang. Use a TCP probe
+        # to distinguish "process not listening" from "listening but slow",
+        # and treat slow listings as a soft warning rather than fatal.
         endpoint = surgeon_cfg.endpoint.rstrip("/")
+        parsed = urlparse(endpoint)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        tcp_ok = False
         try:
-            models_resp = httpx.get(f"{endpoint}/models", timeout=3.0)
-            endpoint_ok = models_resp.status_code == 200
-        except (httpx.ConnectError, httpx.TimeoutException):
+            with socket.create_connection((host, port), timeout=2.0):
+                tcp_ok = True
+        except OSError:
+            tcp_ok = False
+        if not tcp_ok:
             click.echo(
                 f"  {name}: FAIL -- endpoint unreachable ({endpoint}). "
                 f"Is your {surgeon_cfg.provider} server running?"
             )
             all_ok = False
             continue
+
+        endpoint_ok = False
+        models_resp = None
+        listing_slow = False
+        try:
+            models_resp = httpx.get(f"{endpoint}/models", timeout=5.0)
+            endpoint_ok = models_resp.status_code == 200
+        except httpx.TimeoutException:
+            # TCP listener is up but /models is slow — common on local MLX
+            # while a model is loading. Skip the listing and proceed to ping.
+            listing_slow = True
         except Exception as exc:
             click.echo(f"  {name}: FAIL -- endpoint error: {exc}")
             all_ok = False
@@ -297,7 +363,7 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
 
         # Step 3: Check if the configured model exists
         model_found = True
-        if endpoint_ok:
+        if endpoint_ok and models_resp is not None:
             try:
                 data = models_resp.json()
                 if isinstance(data, dict) and "data" in data:
@@ -311,12 +377,38 @@ def probe(ctx: click.Context, dry_run: bool) -> None:
             except Exception:
                 pass  # models listing is best-effort
 
-        # Step 4: Test actual LLM call
+        # Step 4: Test actual LLM call. Local models can be slow on first
+        # token (cold load); give them more headroom than remote APIs.
+        # Wire in fallback providers from config so a stalled local server
+        # falls through to its remote backup instead of failing the probe —
+        # matches the behaviour of every other call site (consult, cross-
+        # examine, gates) which use the fallbacks list automatically.
+        # When a fallback is available we shorten the primary timeout so a
+        # hung local server flips to the fallback within ~10s instead of
+        # blocking the probe for the full minute.
+        fallbacks = surgeon_cfg.get_fallback_configs() or None
+        if is_local and fallbacks:
+            ping_timeout = 12.0
+        elif is_local:
+            ping_timeout = 60.0
+        else:
+            ping_timeout = 15.0
+        if fallbacks:
+            for fb in fallbacks:
+                if fb.api_key_env:
+                    _bootstrap_api_key_from_keychain(fb.api_key_env)
         try:
-            provider = LLMProvider(surgeon_cfg)
-            resp = provider.ping(timeout_s=10.0)
+            provider = LLMProvider(surgeon_cfg, fallbacks=fallbacks)
+            resp = provider.ping(timeout_s=ping_timeout)
             if resp.ok:
-                status = "OK" if model_found else "OK (model responded but not in /models list)"
+                if resp.model and resp.model != surgeon_cfg.model:
+                    status = f"OK via fallback ({resp.model})"
+                elif listing_slow:
+                    status = "OK (models listing slow, ping OK)"
+                elif model_found:
+                    status = "OK"
+                else:
+                    status = "OK (model responded but not in /models list)"
                 click.echo(f"  {name}: {status} ({resp.latency_ms}ms)")
             else:
                 click.echo(f"  {name}: FAIL -- endpoint reachable but query failed: {resp.content[:100]}")

@@ -23,6 +23,65 @@ _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 _THINK_UNCLOSED_RE = re.compile(r"<think>.*", re.DOTALL)
 
 
+def _extract_content(data: dict) -> str:
+    """Extract text content from an /v1/chat/completions response payload.
+
+    Handles the standard OpenAI shape and the common variants emitted by
+    local servers (MLX, llama.cpp, Ollama):
+      - choices[0].message.content      -- OpenAI / DeepSeek / vLLM
+      - choices[0].text                  -- legacy completions / some MLX builds
+      - choices[0].delta.content         -- streamed-shape echoed as final
+      - message.content                  -- single-choice non-array variants
+      - content                          -- bare-content shorthand
+
+    Returns an empty string when no recognised field is present rather than
+    raising — callers compare ok=True with content for downstream behaviour
+    and a missing payload should surface as ``FAIL -- empty content`` rather
+    than ``KeyError: 'choices'``.
+    """
+    if not isinstance(data, dict):
+        return ""
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            msg = first.get("message")
+            if isinstance(msg, dict):
+                value = msg.get("content")
+                if isinstance(value, str) and value:
+                    return value
+                # MLX (mlx-lm.server >=0.31) emits Qwen3 reasoning into a
+                # ``reasoning`` field instead of inlining <think>...</think>
+                # in ``content``. When the model finishes mid-thought the
+                # ``content`` field is missing or empty entirely; surface the
+                # reasoning so health checks see *something* and downstream
+                # strip_think_tags() can clean it up later.
+                reasoning = msg.get("reasoning")
+                if isinstance(reasoning, str) and reasoning:
+                    if isinstance(value, str) and value:
+                        return value
+                    return f"<think>{reasoning}</think>"
+                if isinstance(value, str):
+                    return value
+            value = first.get("text")
+            if isinstance(value, str):
+                return value
+            delta = first.get("delta")
+            if isinstance(delta, dict):
+                value = delta.get("content")
+                if isinstance(value, str):
+                    return value
+    msg = data.get("message")
+    if isinstance(msg, dict):
+        value = msg.get("content")
+        if isinstance(value, str):
+            return value
+    value = data.get("content")
+    if isinstance(value, str):
+        return value
+    return ""
+
+
 def strip_think_tags(text: str) -> str:
     """Remove Qwen3-style <think>...</think> reasoning blocks from LLM output.
 
@@ -254,7 +313,7 @@ class LLMProvider:
             latency_ms = int((time.monotonic() - t0) * 1000)
 
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            content = _extract_content(data)
             if is_local:
                 content = strip_think_tags(content)
 
@@ -333,11 +392,19 @@ class LLMProvider:
             )
 
     def ping(self, timeout_s: float = 5.0) -> LLMResponse:
-        """Quick health check -- asks the model to say 'operational'."""
+        """Quick health check -- asks the model to say 'operational'.
+
+        Local reasoning models (Qwen3, DeepSeek-R1) burn many tokens inside
+        <think> blocks before emitting any visible content, so ``max_tokens``
+        is sized for them; remote chat models simply ignore the extra
+        headroom and stop at their natural EOS. ``strip_think_tags`` removes
+        the reasoning before callers see the response.
+        """
+        max_tokens = 256 if self._is_local else 32
         return self.query(
             system="You are a health check responder.",
             prompt="Say 'operational' in one word.",
-            max_tokens=32,
+            max_tokens=max_tokens,
             timeout_s=timeout_s,
         )
 
