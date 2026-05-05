@@ -31,8 +31,11 @@ _REASONING_MODEL_RE = re.compile(
     r"(reasoner|-r1\b|^o1|^o3|^o4|thinking|qwq)",
     re.IGNORECASE,
 )
-# Providers known to support OpenAI-style response_format JSON mode.
-_JSON_MODE_PROVIDERS = frozenset({"openai", "deepseek", "groq", "mistral", "xai"})
+# Providers verified to accept OpenAI-style response_format={"type":"json_object"}.
+# Empirical: OpenAI (native), DeepSeek (docs confirm), Groq (OpenAI-compat docs).
+# Excluded: Mistral (partial model support), xAI (unverified) — would 400 on
+# unsupported endpoints. Add only after verification.
+_JSON_MODE_PROVIDERS = frozenset({"openai", "deepseek", "groq"})
 
 
 def strip_think_tags(text: str) -> str:
@@ -61,9 +64,18 @@ def reasoning_max_tokens(model: str, requested: int) -> int:
     answer. With the requested budget unmodified, the final answer gets
     truncated mid-string (breaking strict JSON parsing). Bump 4× capped
     at 8192 to leave headroom without exploding cost on regular calls.
+
+    Logs once at INFO when bump fires so the budget side-effect is
+    observable to operators tracking daily_external_usd cap.
     """
     if is_reasoning_model(model):
-        return min(max(requested * 4, 2048), 8192)
+        bumped = min(max(requested * 4, 2048), 8192)
+        if bumped != requested:
+            logger.info(
+                "reasoning_max_tokens: model=%s bumped %d→%d (CoT budget headroom)",
+                model, requested, bumped,
+            )
+        return bumped
     return requested
 
 
@@ -117,7 +129,20 @@ def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
 
 @dataclass
 class LLMResponse:
-    """Structured response from an LLM provider call."""
+    """Structured response from an LLM provider call.
+
+    `reasoning_content` is preserved separately from `content` so that
+    multi-turn callers can re-inject CoT into subsequent assistant turns.
+
+    `content_blocks` preserves the raw typed-block list when the provider
+    returns one (Anthropic native, future protocols). Tool-using agents
+    MUST inspect this to detect `tool_use` blocks — extracting only `text`
+    into `content` would silently drop tool invocations.
+
+    `finish_reason` surfaces why the model stopped (`stop`, `length`,
+    `content_filter`, `tool_use`, etc.). Callers can detect non-`stop`
+    cases without re-parsing the full API response.
+    """
 
     ok: bool
     content: str
@@ -126,6 +151,9 @@ class LLMResponse:
     cost_usd: float = 0.0
     tokens_in: int = 0
     tokens_out: int = 0
+    reasoning_content: str = ""
+    content_blocks: Optional[List[Dict]] = None
+    finish_reason: str = ""
 
     @classmethod
     def error(cls, message: str, model: str = "") -> LLMResponse:
@@ -304,17 +332,49 @@ class LLMProvider:
             latency_ms = int((time.monotonic() - t0) * 1000)
 
             data = resp.json()
-            # Layer 1: provider-aware extraction. Some reasoning models
-            # split CoT into a separate `reasoning_content` field — we
-            # ignore it and keep only `content` (the final answer).
-            msg = data["choices"][0]["message"]
-            content = msg.get("content") or ""
-            # Defensive: if `content` is empty but `reasoning_content` present,
-            # use last paragraph of reasoning as a fallback (rare; e.g. o1 with
-            # truncation). Otherwise stay empty.
-            if not content and msg.get("reasoning_content"):
-                rc = str(msg["reasoning_content"])
-                content = rc.split("\n\n")[-1] if "\n\n" in rc else rc
+            choice = data["choices"][0]
+            finish_reason = str(choice.get("finish_reason") or "")
+            # Layer 1: provider-aware extraction. Reasoning models split CoT
+            # into a separate `reasoning_content` field — preserve it on the
+            # response (multi-turn callers can re-inject) but use `content`
+            # for the primary answer string.
+            msg = choice["message"]
+            raw_content = msg.get("content") or ""
+            # Some providers (Anthropic native, future ones) return content as
+            # a list of typed blocks: [{"type": "text", "text": "..."},
+            # {"type": "thinking", "thinking": "..."}]. Concatenate text
+            # blocks; route thinking blocks into reasoning_content.
+            content_blocks: Optional[List[Dict]] = None
+            if isinstance(raw_content, list):
+                content_blocks = [b for b in raw_content if isinstance(b, dict)]
+                text_parts: List[str] = []
+                thinking_parts: List[str] = []
+                for block in content_blocks:
+                    btype = block.get("type", "")
+                    if btype in ("text", "output_text"):
+                        text_parts.append(str(block.get("text", "")))
+                    elif btype in ("thinking", "reasoning"):
+                        thinking_parts.append(str(block.get(btype, "") or block.get("text", "")))
+                    # NOTE: tool_use, tool_result, image, etc. blocks are
+                    # preserved on `content_blocks` for callers — NOT silently
+                    # dropped. Tool-using agents inspect content_blocks
+                    # directly to detect tool invocations.
+                content = "".join(text_parts)
+                inline_reasoning = "\n".join(p for p in thinking_parts if p)
+            else:
+                content = str(raw_content)
+                inline_reasoning = ""
+            reasoning_content = (
+                str(msg.get("reasoning_content") or "") or inline_reasoning
+            )
+            # Defensive: if `content` is empty but reasoning_content present,
+            # use last paragraph of reasoning as a fallback (rare; truncation).
+            if not content and reasoning_content:
+                content = (
+                    reasoning_content.split("\n\n")[-1]
+                    if "\n\n" in reasoning_content
+                    else reasoning_content
+                )
             # Universal CoT-tag strip (all providers, not just is_local) —
             # some hosted models inline <think> too.
             content = strip_think_tags(content)
@@ -324,6 +384,15 @@ class LLMProvider:
             tokens_out = usage.get("completion_tokens", 0)
             cost = estimate_cost(model, tokens_in, tokens_out)
 
+            # ZSF: log non-stop finish reasons so safety-filter / length /
+            # tool_use truncation is observable. Don't auto-retry — the
+            # caller decides (a length-truncation might want a bump, but a
+            # content_filter never will).
+            if finish_reason and finish_reason not in ("stop", "end_turn"):
+                logger.warning(
+                    "LLM finished with non-stop reason: %s (model=%s, content_len=%d)",
+                    finish_reason, model, len(content),
+                )
             return LLMResponse(
                 ok=True,
                 content=content,
@@ -332,6 +401,9 @@ class LLMProvider:
                 cost_usd=cost,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
+                reasoning_content=reasoning_content,
+                content_blocks=content_blocks,
+                finish_reason=finish_reason,
             )
 
         except httpx.ConnectError as exc:
