@@ -619,13 +619,14 @@ class SurgeryTeam:
         """
         result = ConsensusResult(claim=claim)
 
-        # Query cardiologist
+        # Query cardiologist (json_mode + reasoning-aware budget bump in provider)
         cardio_resp = self._safe_query(
             self._cardiologist,
             system=_CONSENSUS_SYSTEM,
             prompt=_CONSENSUS_PROMPT.format(claim=claim),
-            max_tokens=256,
+            max_tokens=512,
             temperature=0.2,
+            json_mode=True,
         )
         warnings: List[str] = []
         if cardio_resp:
@@ -640,13 +641,14 @@ class SurgeryTeam:
             if cardio_flag:
                 result.confabulation_flags["cardiologist"] = cardio_flag
 
-        # Query neurologist
+        # Query neurologist (same budget + json_mode as cardio for parity)
         neuro_resp = self._safe_query(
             self._neurologist,
             system=_CONSENSUS_SYSTEM,
             prompt=_CONSENSUS_PROMPT.format(claim=claim),
-            max_tokens=256,
+            max_tokens=512,
             temperature=0.2,
+            json_mode=True,
         )
         if neuro_resp:
             result.total_cost += neuro_resp.cost_usd
@@ -1103,15 +1105,32 @@ class SurgeryTeam:
         prompt: str,
         max_tokens: int = 2048,
         temperature: float = 0.7,
+        json_mode: bool = False,
     ) -> Optional[LLMResponseLike]:
-        """Query a provider, returning None on failure instead of crashing."""
+        """Query a provider, returning None on failure instead of crashing.
+
+        json_mode=True opts into provider-native JSON mode (response_format)
+        when the underlying provider supports it (DeepSeek, OpenAI, Groq,
+        Mistral, xAI). Eliminates prose wrapping for callers with strict
+        schemas (consensus, AB validation). Provider-aware in models.py —
+        unsupported providers fall through to standard call.
+        """
         try:
-            resp = provider.query(
-                system=system,
-                prompt=prompt,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+            kwargs = {
+                "system": system,
+                "prompt": prompt,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+            # Only pass json_mode if the provider's query() accepts it.
+            # Older provider stubs (or non-LLMProvider mocks) won't have it.
+            try:
+                import inspect
+                if "json_mode" in inspect.signature(provider.query).parameters:
+                    kwargs["json_mode"] = json_mode
+            except (TypeError, ValueError):
+                pass
+            resp = provider.query(**kwargs)
             if not resp.ok:
                 logger.warning(
                     "LLM query failed (model=%s): %s", resp.model, resp.content

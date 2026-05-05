@@ -21,21 +21,50 @@ logger = logging.getLogger(__name__)
 # Pricing per 1M tokens: (input_usd, output_usd)
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 _THINK_UNCLOSED_RE = re.compile(r"<think>.*", re.DOTALL)
+# Generalized CoT-wrapper detection — covers <think>, <thinking>, <reasoning>
+# variants emitted by Qwen3, DeepSeek-R1 distill, future thinking models.
+_COT_TAG_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>\s*", re.DOTALL | re.IGNORECASE)
+_COT_UNCLOSED_RE = re.compile(r"<(think|thinking|reasoning)>.*", re.DOTALL | re.IGNORECASE)
+# Reasoning models that need bigger max_tokens budget for CoT overhead.
+# Match by name pattern so future models auto-qualify without code changes.
+_REASONING_MODEL_RE = re.compile(
+    r"(reasoner|-r1\b|^o1|^o3|^o4|thinking|qwq)",
+    re.IGNORECASE,
+)
+# Providers known to support OpenAI-style response_format JSON mode.
+_JSON_MODE_PROVIDERS = frozenset({"openai", "deepseek", "groq", "mistral", "xai"})
 
 
 def strip_think_tags(text: str) -> str:
-    """Remove Qwen3-style <think>...</think> reasoning blocks from LLM output.
+    """Remove CoT/<think>-style reasoning wrappers from LLM output.
 
-    Handles both closed tags and unclosed tags (when token budget runs out
-    before the model can emit </think>).
+    Generalized to match `<think>`, `<thinking>`, `<reasoning>` (any case).
+    Handles closed AND unclosed tags (budget exhausted mid-thought).
+    Provider-agnostic: works for Qwen3, DeepSeek-R1 distill, future models.
     """
-    if "<think>" not in text:
+    if "<think" not in text.lower() and "<reasoning" not in text.lower():
         return text
-    # Closed tags first
-    result = _THINK_RE.sub("", text)
-    # Unclosed tag (budget exhausted mid-thought)
-    result = _THINK_UNCLOSED_RE.sub("", result)
+    result = _COT_TAG_RE.sub("", text)
+    result = _COT_UNCLOSED_RE.sub("", result)
     return result.strip()
+
+
+def is_reasoning_model(model: str) -> bool:
+    """True if model name matches a reasoning/CoT family (needs larger budget)."""
+    return bool(_REASONING_MODEL_RE.search(model or ""))
+
+
+def reasoning_max_tokens(model: str, requested: int) -> int:
+    """Auto-bump max_tokens for reasoning models — CoT eats budget.
+
+    Reasoning models often emit hundreds of CoT tokens before the final
+    answer. With the requested budget unmodified, the final answer gets
+    truncated mid-string (breaking strict JSON parsing). Bump 4× capped
+    at 8192 to leave headroom without exploding cost on regular calls.
+    """
+    if is_reasoning_model(model):
+        return min(max(requested * 4, 2048), 8192)
+    return requested
 
 
 PRICING: Dict[str, Tuple[float, float]] = {
@@ -147,6 +176,7 @@ class LLMProvider:
         self.endpoint: str = config.endpoint.rstrip("/")
         self.model: str = config.model
         self._api_key: Optional[str] = config.get_api_key()
+        self._provider: str = config.provider
         self._is_local: bool = config.provider in ("ollama", "mlx", "local", "vllm", "lmstudio")
         self._adapter = query_adapter
         self._fallbacks: List[SurgeonConfig] = fallbacks or []
@@ -161,6 +191,7 @@ class LLMProvider:
         max_tokens: int = 2048,
         temperature: float = 0.7,
         timeout_s: float = 300.0,
+        json_mode: bool = False,
     ) -> LLMResponse:
         """Send a chat completion request with retry and fallback support.
 
@@ -192,6 +223,7 @@ class LLMProvider:
             resp = self._single_query(
                 self.endpoint, self.model, self._api_key, self._is_local,
                 system, prompt, max_tokens, temperature, timeout_s,
+                json_mode=json_mode, provider=self._provider,
             )
             if resp.ok:
                 return resp
@@ -211,6 +243,7 @@ class LLMProvider:
             resp = self._single_query(
                 fb_endpoint, fb_config.model, fb_key, fb_is_local,
                 system, prompt, max_tokens, temperature, timeout_s,
+                json_mode=json_mode, provider=fb_config.provider,
             )
             if resp.ok:
                 return resp
@@ -229,22 +262,39 @@ class LLMProvider:
         max_tokens: int,
         temperature: float,
         timeout_s: float,
+        json_mode: bool = False,
+        provider: str = "",
     ) -> LLMResponse:
-        """Execute a single HTTP request to an OpenAI-compatible endpoint."""
+        """Execute a single HTTP request to an OpenAI-compatible endpoint.
+
+        CoT-invariant content extraction:
+        - Auto-bumps max_tokens for reasoning models (CoT eats budget)
+        - Opt-in JSON mode via response_format (provider-aware)
+        - Drops `reasoning_content` field, keeps `content` (DeepSeek-reasoner,
+          o1-style, future thinking models)
+        - Strips inline <think>/<thinking>/<reasoning> tags universally
+        """
         url = f"{endpoint}/chat/completions"
         headers: Dict[str, str] = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        payload = {
+        # Layer 3: bump max_tokens for reasoning families
+        effective_max = reasoning_max_tokens(model, max_tokens)
+
+        payload: Dict = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max,
             "temperature": temperature,
         }
+
+        # Layer 2: opt-in JSON mode where supported (eliminates prose wrapping)
+        if json_mode and provider in _JSON_MODE_PROVIDERS:
+            payload["response_format"] = {"type": "json_object"}
 
         t0 = time.monotonic()
         try:
@@ -254,9 +304,20 @@ class LLMProvider:
             latency_ms = int((time.monotonic() - t0) * 1000)
 
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-            if is_local:
-                content = strip_think_tags(content)
+            # Layer 1: provider-aware extraction. Some reasoning models
+            # split CoT into a separate `reasoning_content` field — we
+            # ignore it and keep only `content` (the final answer).
+            msg = data["choices"][0]["message"]
+            content = msg.get("content") or ""
+            # Defensive: if `content` is empty but `reasoning_content` present,
+            # use last paragraph of reasoning as a fallback (rare; e.g. o1 with
+            # truncation). Otherwise stay empty.
+            if not content and msg.get("reasoning_content"):
+                rc = str(msg["reasoning_content"])
+                content = rc.split("\n\n")[-1] if "\n\n" in rc else rc
+            # Universal CoT-tag strip (all providers, not just is_local) —
+            # some hosted models inline <think> too.
+            content = strip_think_tags(content)
 
             usage = data.get("usage", {})
             tokens_in = usage.get("prompt_tokens", 0)
