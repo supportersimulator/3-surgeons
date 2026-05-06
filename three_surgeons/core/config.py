@@ -160,15 +160,15 @@ class SurgeonConfig:
     fallbacks: List[Dict[str, str]] = field(default_factory=list)
 
     def get_api_key(self) -> Optional[str]:
-        """Read API key from the environment variable.
+        """Read API key from environment, then macOS keychain (L2 finding).
 
-        Returns None if the env var is missing or the value is < 6 characters.
+        Resolution order:
+          1. Configured ``api_key_env`` env var
+          2. DeepSeek convenience fallback ``DEEPSEEK_API_KEY`` env var
+          3. macOS keychain — ``security find-generic-password -s fleet-nerve -a <api_key_env>``
+             (covers launchd/hooks/xbar processes that lack the interactive shell env)
 
-        For DeepSeek (provider=="deepseek"), also accepts ``DEEPSEEK_API_KEY``
-        as a fallback — this matches the convention documented in the
-        3-Surgeons README and in the AWS Secrets Manager path
-        ``/ersim/prod/backend/DEEPSEEK_API_KEY``. The configured
-        ``api_key_env`` always wins when it is populated.
+        Returns None if all three miss or yield < 6 characters.
         """
         primary = os.environ.get(self.api_key_env) if self.api_key_env else None
         if primary is not None and len(primary) >= 6:
@@ -178,8 +178,30 @@ class SurgeonConfig:
             fallback = os.environ.get("DEEPSEEK_API_KEY")
             if fallback is not None and len(fallback) >= 6:
                 return fallback
-        if primary is None:
-            return None
+        # Keychain fallback — same defect class as audit_consult E3.
+        # Tries multiple service-name patterns since this repo's keychain
+        # has been written with different conventions over time:
+        #   1. -s <api_key_env>                  (service == env var name, observed)
+        #   2. -s fleet-nerve -a <api_key_env>   (RACE / CLAUDE.md broker convention)
+        # Only attempted when env-based resolution has failed; never raises.
+        if self.api_key_env:
+            try:
+                import subprocess
+                attempts = [
+                    ["security", "find-generic-password", "-s", self.api_key_env, "-w"],
+                    ["security", "find-generic-password",
+                     "-s", "fleet-nerve", "-a", self.api_key_env, "-w"],
+                ]
+                for cmd in attempts:
+                    rc = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+                    if rc.returncode == 0:
+                        val = (rc.stdout or "").strip()
+                        if len(val) >= 6:
+                            return val
+            except Exception:
+                # ZSF: keychain access can fail for many reasons (sandbox, missing
+                # entry, timeout). Caller already handles None as "no key".
+                pass
         return None
 
     def get_fallback_configs(self) -> List["SurgeonConfig"]:
