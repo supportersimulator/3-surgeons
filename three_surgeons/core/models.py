@@ -254,7 +254,12 @@ class LLMProvider:
             latency_ms = int((time.monotonic() - t0) * 1000)
 
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            # Qwen3 reasoning-mode responses (mlx_lm.server) may return
+            # `message.reasoning` with empty/absent `message.content`. Fall
+            # back to reasoning so neurologist (local Qwen) stays usable
+            # without /no_think markers. RACE AB3.
+            msg = data["choices"][0]["message"]
+            content = msg.get("content") or msg.get("reasoning") or ""
             if is_local:
                 content = strip_think_tags(content)
 
