@@ -26,6 +26,31 @@ LOCAL_BACKENDS = [
 # ZSF: keychain-fallback observability counter (merge-resolve 2026-05-08).
 _KEYCHAIN_ERRORS: Dict[str, Any] = {"count": 0, "last": ""}
 
+# ZSF: neurologist fallback-chain observability counters (QQ1 2026-05-08).
+# Increments whenever resolve_neurologist_with_fallback() picks a provider.
+# The "default" key tracks the no-flap case (ollama up, ollama wins) so a
+# spike in non-default keys signals a fleet-wide degradation event.
+# Surfaced via bridge-status / get_neuro_fallback_counters().
+_NEURO_FALLBACK_COUNTERS: Dict[str, int] = {
+    "ollama": 0,
+    "mlx": 0,
+    "mlx_proxy": 0,
+    "deepseek": 0,
+    "default_kept": 0,  # no fallback ran — env var or CLI flag honored
+    "no_provider_reachable": 0,  # all probes failed AND no deepseek key
+}
+
+
+def get_neuro_fallback_counters() -> Dict[str, int]:
+    """Return a snapshot of the neurologist fallback-chain counters."""
+    return dict(_NEURO_FALLBACK_COUNTERS)
+
+
+def reset_neuro_fallback_counters() -> None:
+    """Reset counters — used by tests to isolate runs."""
+    for k in _NEURO_FALLBACK_COUNTERS:
+        _NEURO_FALLBACK_COUNTERS[k] = 0
+
 
 # ── Cardiologist provider presets ─────────────────────────────────────
 #
@@ -97,6 +122,16 @@ NEUROLOGIST_PROVIDER_PRESETS: Dict[str, Dict[str, str]] = {
         "model": "mlx-community/Qwen3-4B-4bit",
         "api_key_env": "",
     },
+    # The LLM priority queue proxy (CLAUDE.md: never call MLX directly,
+    # route through llm_priority_queue at :5045). Same OpenAI-compatible
+    # surface, but routes via the priority queue so 3-surgeons doesn't
+    # stampede MLX during high-traffic cardio/neuro turns.
+    "mlx_proxy": {
+        "provider": "mlx",
+        "endpoint": "http://localhost:5045/v1",
+        "model": "local-llm",
+        "api_key_env": "",
+    },
     "deepseek": {
         "provider": "deepseek",
         "endpoint": "https://api.deepseek.com/v1",
@@ -104,6 +139,13 @@ NEUROLOGIST_PROVIDER_PRESETS: Dict[str, Dict[str, str]] = {
         "api_key_env": "Context_DNA_Deepseek",
     },
 }
+
+
+# Auto-fallback chain order for the neurologist (QQ1 2026-05-08).
+# When neither CONTEXT_DNA_NEURO_PROVIDER env var nor --neuro-provider CLI
+# flag is set, Config.discover() walks this list and picks the first
+# reachable provider. Probe order = local-fastest first → cloud last.
+NEUROLOGIST_FALLBACK_CHAIN: List[str] = ["ollama", "mlx", "mlx_proxy", "deepseek"]
 
 
 def neurologist_provider_preset(provider: str) -> Dict[str, str]:
@@ -185,6 +227,42 @@ def make_cardiologist_config(
 
 class MissingProviderKeyError(RuntimeError):
     """Raised when a cardiologist provider is selected but its API key is absent."""
+
+
+def _probe_provider_reachable(provider_key: str, timeout_s: float = 2.0) -> bool:
+    """Return True if the given neurologist preset is reachable.
+
+    Reachability rules (QQ1 2026-05-08):
+      * local providers (ollama, mlx, mlx_proxy): GET ``<endpoint>/models``
+        with ``timeout_s``. 200 OK == reachable. Any error / non-2xx == unreachable.
+      * deepseek (cloud): require an API key (env or keychain). We do NOT
+        ping the cloud endpoint — keys + reachable network is good enough,
+        and a probe would burn quota on every CLI invocation.
+
+    ZSF: never raises; returns False on any unexpected error.
+    """
+    try:
+        preset = NEUROLOGIST_PROVIDER_PRESETS.get(provider_key)
+        if not preset:
+            return False
+        if preset["provider"] == "deepseek":
+            # Build a temporary SurgeonConfig solely to reuse the standard
+            # 3-tier key resolution (env → alt-env → keychain).
+            tmp = SurgeonConfig(
+                provider=preset["provider"],
+                endpoint=preset["endpoint"],
+                model=preset["model"],
+                api_key_env=preset["api_key_env"],
+            )
+            return tmp.get_api_key() is not None
+        # Local: probe /v1/models
+        url = f"{preset['endpoint'].rstrip('/')}/models"
+        resp = httpx.get(url, timeout=timeout_s)
+        return resp.status_code == 200
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError, OSError, ValueError):
+        return False
+    except Exception:  # noqa: BLE001 — ZSF outer guard, never crash discovery
+        return False
 
 
 def detect_local_backend(timeout_s: float = 2.0) -> list[dict]:
@@ -518,6 +596,23 @@ class Config:
             except ValueError:
                 # Bogus env var — preserve default rather than crash discovery.
                 pass
+            # Explicit override → counter bump; no fallback run.
+            _NEURO_FALLBACK_COUNTERS["default_kept"] = (
+                _NEURO_FALLBACK_COUNTERS.get("default_kept", 0) + 1
+            )
+        else:
+            # QQ1 2026-05-08 — no explicit override → walk the fallback chain
+            # so degraded nodes silently upgrade to the next reachable provider
+            # (ollama → mlx → mlx_proxy → deepseek). On healthy nodes ollama
+            # wins on the first probe, preserving today's default behavior.
+            # Disabled by setting CONTEXT_DNA_NEURO_FALLBACK_DISABLE=1 — useful
+            # for tests / air-gapped scenarios that want strict legacy
+            # "default = ollama no matter what" behavior.
+            if os.environ.get("CONTEXT_DNA_NEURO_FALLBACK_DISABLE") != "1":
+                try:
+                    cfg.resolve_neurologist_with_fallback()
+                except Exception:  # noqa: BLE001 — ZSF: discover() must never crash
+                    pass
 
         return cfg
 
@@ -594,6 +689,53 @@ class Config:
             cfg.telemetry = _merge_dataclass(cfg.telemetry, telemetry_raw)
 
         return cfg
+
+    def resolve_neurologist_with_fallback(
+        self,
+        chain: Optional[List[str]] = None,
+        probe_timeout_s: float = 2.0,
+    ) -> "Config":
+        """Walk the neurologist fallback chain and apply the first reachable provider.
+
+        QQ1 2026-05-08 — fixes the silent single-surgeon degradation reported by
+        PP1 (commit 83b21e29b): on hosts where ollama is down (e.g. mac3) the
+        default ``3s consensus`` returned ``Neurologist: unavailable`` rather
+        than failing over to mlx / proxy / DeepSeek.
+
+        Caller contract:
+          * Only call this when neither ``CONTEXT_DNA_NEURO_PROVIDER`` nor
+            ``--neuro-provider`` was supplied. Explicit overrides MUST win.
+          * Mutates ``self.neurologist`` to the first reachable preset.
+          * If nothing in the chain is reachable, leaves ``self.neurologist``
+            untouched (current default — fail-safe behavior so that the rest
+            of the pipeline still emits a friendly "neurologist unavailable"
+            warning rather than a config crash).
+
+        Increments ZSF observability counters on every choice:
+        ``_NEURO_FALLBACK_COUNTERS[<chosen>]`` and, when ollama wins (the
+        default), also ``default_kept`` so dashboards distinguish "ollama up"
+        from "active failover landed on ollama after probing it."
+        """
+        ladder = chain if chain is not None else NEUROLOGIST_FALLBACK_CHAIN
+        for provider_key in ladder:
+            if _probe_provider_reachable(provider_key, timeout_s=probe_timeout_s):
+                # Apply preset. require_key=False because reachability already
+                # verified the key for deepseek; for local providers it's a
+                # no-op anyway.
+                try:
+                    self.apply_neurologist_provider(provider_key, require_key=False)
+                except ValueError:
+                    # Bogus chain entry — skip and keep walking.
+                    continue
+                _NEURO_FALLBACK_COUNTERS[provider_key] = (
+                    _NEURO_FALLBACK_COUNTERS.get(provider_key, 0) + 1
+                )
+                return self
+        # Nothing reachable. Record the miss so dashboards see degraded fleet.
+        _NEURO_FALLBACK_COUNTERS["no_provider_reachable"] = (
+            _NEURO_FALLBACK_COUNTERS.get("no_provider_reachable", 0) + 1
+        )
+        return self
 
     def apply_cardiologist_provider(
         self,

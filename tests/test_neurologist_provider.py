@@ -69,8 +69,12 @@ class TestNeurologistPresets:
         assert neurologist_provider_preset("DEEPSEEK")["provider"] == "deepseek"
         assert neurologist_provider_preset(" Ollama ")["provider"] == "ollama"
 
-    def test_preset_table_has_three_providers(self):
-        assert set(NEUROLOGIST_PROVIDER_PRESETS) == {"ollama", "mlx", "deepseek"}
+    def test_preset_table_has_expected_providers(self):
+        # QQ1 2026-05-08: ``mlx_proxy`` added so the auto-fallback chain can
+        # walk ollama → mlx → mlx_proxy (:5045 priority queue) → deepseek.
+        assert set(NEUROLOGIST_PROVIDER_PRESETS) == {
+            "ollama", "mlx", "mlx_proxy", "deepseek"
+        }
 
 
 class TestApplyNeurologistProvider:

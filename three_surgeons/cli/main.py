@@ -492,6 +492,14 @@ def bridge_status_cmd(ctx: click.Context, as_json: bool) -> None:
             "counters": {"note": "counters available only via bridge"},
         }
 
+    # QQ1 2026-05-08 — attach neurologist fallback chain counters so
+    # programmatic health checks (Atlas, fleet dashboards) see them too.
+    try:
+        from three_surgeons.core.config import get_neuro_fallback_counters
+        status["neuro_fallback_counters"] = get_neuro_fallback_counters()
+    except Exception:  # noqa: BLE001 — diagnostic, never crash
+        status["neuro_fallback_counters"] = {}
+
     if as_json:
         click.echo(json.dumps(status, indent=2, default=str))
         return
@@ -524,6 +532,34 @@ def bridge_status_cmd(ctx: click.Context, as_json: bool) -> None:
         click.echo(f"    Subprocess calls:{counters.get('subprocess_calls', 0)}")
         click.echo(f"    Fallbacks:       {counters.get('fallbacks', 0)}")
         click.echo(f"    Errors:          {counters.get('errors', 0)}")
+
+    # QQ3 — surface diversity-canary counters as a sidecar block.
+    try:
+        from three_surgeons.core.diversity_canary import get_diversity_status
+        dstat = get_diversity_status()
+        dctr = dstat.get("counters", {})
+        click.echo()
+        enabled = "yes" if dstat.get("enabled") else "no (kill-switch)"
+        click.echo(f"  Diversity canary: {enabled}")
+        click.echo(f"    Consensus calls:        {dctr.get('consensus_total', 0)}")
+        click.echo(f"    YELLOW signals total:   {dctr.get('yellow_signals_total', 0)}")
+    except Exception:  # noqa: BLE001 — ZSF: bridge-status must not regress
+        pass
+
+    # QQ1 2026-05-08 — neurologist fallback chain observability. Counts
+    # increment per-process whenever Config.discover() walks the chain.
+    try:
+        from three_surgeons.core.config import get_neuro_fallback_counters
+        nfc = get_neuro_fallback_counters()
+        # Inject into JSON output too — re-render if --json-output was set.
+        if any(v for v in nfc.values()):
+            click.echo()
+            click.echo("  Neurologist fallback chain (this process):")
+            for key in ("ollama", "mlx", "mlx_proxy", "deepseek",
+                        "default_kept", "no_provider_reachable"):
+                click.echo(f"    {key:<22} {nfc.get(key, 0)}")
+    except Exception:  # noqa: BLE001 — diagnostic command, never crash
+        pass
 
     # Exit 1 if version mismatch
     if vc is False:
@@ -1151,6 +1187,46 @@ def consensus(ctx: click.Context, claim: str, dry_run: bool) -> None:
                f"(confidence={result.neurologist_confidence:.2f})")
     click.echo(f"  Weighted score: {result.weighted_score:+.2f}")
     click.echo(f"  Total cost: ${result.total_cost:.4f}")
+
+    # QQ3 diversity canary — stderr-only so machine-parseable stdout stays
+    # clean. Aaron greps for the warning; agents parsing stdout don't see it.
+    if getattr(result, "diversity_yellow", False):
+        for reason in getattr(result, "diversity_reasons", []) or []:
+            click.echo(f"\n  ⚠️  Diversity canary: {reason}", err=True)
+
+
+# -- diversity-status -------------------------------------------------------
+
+
+@cli.command("diversity-status")
+@click.option("--json-output", "as_json", is_flag=True, help="Output as JSON")
+@click.pass_context
+def diversity_status_cmd(ctx: click.Context, as_json: bool) -> None:
+    """Diagnostic: show diversity-canary counters (QQ3).
+
+    Sidecar to INV-006 — surfaces YELLOW collapse signals (model collapse,
+    byte-identical replies, frictionless agreement) without failing
+    consensus. Set ``CONTEXT_DNA_DIVERSITY_CANARY=off`` to disable emission.
+    """
+    from three_surgeons.core.diversity_canary import get_diversity_status
+
+    status = get_diversity_status()
+    if as_json:
+        click.echo(json.dumps(status, indent=2, default=str))
+        return
+
+    click.echo("Diversity Canary Status")
+    click.echo("=" * 40)
+    enabled = "yes" if status["enabled"] else "no (kill-switch active)"
+    click.echo(f"  Enabled: {enabled}")
+    click.echo()
+    click.echo("  Counters (this process):")
+    counters = status["counters"]
+    click.echo(f"    Consensus calls:           {counters.get('consensus_total', 0)}")
+    click.echo(f"    Same provider+model:       {counters.get('same_provider_same_model', 0)}")
+    click.echo(f"    Byte-identical replies:    {counters.get('byte_identical_replies', 0)}")
+    click.echo(f"    Frictionless agree:        {counters.get('verdict_agree_no_caveats', 0)}")
+    click.echo(f"    Total YELLOW signals:      {counters.get('yellow_signals_total', 0)}")
 
 
 # -- sentinel ---------------------------------------------------------------

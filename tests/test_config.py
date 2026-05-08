@@ -187,7 +187,12 @@ class TestConfigDiscovery:
         assert cfg.cardiologist.model == "gpt-4o-from-home"
 
     def test_config_discovery_falls_to_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No config files anywhere, verify defaults are returned."""
+        """No config files anywhere, verify defaults are returned.
+
+        QQ1 2026-05-08: ``CONTEXT_DNA_NEURO_FALLBACK_DISABLE=1`` is set so the
+        neurologist auto-fallback chain doesn't probe live local services
+        on the test host (which would silently flip the model to mlx).
+        """
         fake_home = tmp_path / "empty_home"
         fake_home.mkdir()
 
@@ -195,6 +200,7 @@ class TestConfigDiscovery:
         project_dir.mkdir()
 
         monkeypatch.setenv("HOME", str(fake_home))
+        monkeypatch.setenv("CONTEXT_DNA_NEURO_FALLBACK_DISABLE", "1")
 
         cfg = Config.discover(project_dir=project_dir)
 

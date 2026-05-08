@@ -266,9 +266,15 @@ class TestConfigDiscoveryIntegration:
     """Verify the config discovery chain works end-to-end."""
 
     def test_defaults_when_no_config_files(self, tmp_path, monkeypatch):
-        """Config.discover with a dir containing no config returns defaults."""
+        """Config.discover with a dir containing no config returns defaults.
+
+        QQ1 2026-05-08: ``CONTEXT_DNA_NEURO_FALLBACK_DISABLE=1`` keeps the
+        new auto-fallback chain from probing live local services on the
+        test host (which would silently flip the model to mlx).
+        """
         # Isolate from real ~/.3surgeons/config.yaml on the host machine
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setenv("CONTEXT_DNA_NEURO_FALLBACK_DISABLE", "1")
         config = Config.discover(project_dir=tmp_path)
         assert config.cardiologist.model == "gpt-4.1-mini"
         assert config.neurologist.model == "qwen3:4b"
@@ -280,6 +286,8 @@ class TestConfigDiscoveryIntegration:
 
         # Isolate from real ~/.3surgeons/config.yaml on the host machine
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        # QQ1 2026-05-08: gate the auto-fallback chain (see sibling test).
+        monkeypatch.setenv("CONTEXT_DNA_NEURO_FALLBACK_DISABLE", "1")
 
         project_config = tmp_path / ".3surgeons.yaml"
         project_config.write_text(
