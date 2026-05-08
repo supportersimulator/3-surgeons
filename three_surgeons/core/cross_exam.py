@@ -175,6 +175,11 @@ class ConsensusResult:
     weighted_score: float = 0.0
     total_cost: float = 0.0
     confabulation_flags: dict = field(default_factory=dict)
+    # Diversity canary sidecar (QQ3) — never affects pass/fail; surfaces
+    # collapse patterns post-neuro-cutover. ``yellow=False`` and
+    # ``reasons=[]`` is the healthy state.
+    diversity_yellow: bool = False
+    diversity_reasons: List[str] = field(default_factory=list)
 
 
 # ── Prompt Templates ─────────────────────────────────────────────────
@@ -695,6 +700,33 @@ class SurgeryTeam:
 
         # Calculate weighted consensus score
         result.weighted_score = self._calculate_weighted_score(result)
+
+        # Diversity canary sidecar (QQ3) — always runs, never raises, never
+        # affects pass/fail. Bumps module counters surfaced via
+        # ``three_surgeons.core.diversity_canary.get_diversity_status()``.
+        try:
+            from three_surgeons.core.diversity_canary import evaluate_diversity
+
+            cardio_reply = {
+                "text": cardio_resp.content if cardio_resp else "",
+                "verdict": result.cardiologist_assessment,
+                "caveats": [],
+            }
+            neuro_reply = {
+                "text": neuro_resp.content if neuro_resp else "",
+                "verdict": result.neurologist_assessment,
+                "caveats": [],
+            }
+            canary = evaluate_diversity(
+                cardio_reply,
+                neuro_reply,
+                self._cardiologist,
+                self._neurologist,
+            )
+            result.diversity_yellow = bool(canary.get("yellow"))
+            result.diversity_reasons = list(canary.get("reasons") or [])
+        except Exception as exc:  # noqa: BLE001 — ZSF: canary is sidecar only
+            logger.debug("Diversity canary skipped: %s", exc)
 
         return result
 
