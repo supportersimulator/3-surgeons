@@ -98,6 +98,32 @@ CARDIOLOGIST_PROVIDER_PRESETS: Dict[str, Dict[str, str]] = {
         # by SurgeonConfig.get_api_key() for the DeepSeek provider.
         "api_key_env": "Context_DNA_Deepseek",
     },
+    # SS2 2026-05-08 — Anthropic preset added to restore the 3-surgeon
+    # invariant when both OpenAI billing is inactive (RR5 finding) and
+    # neurologist is pinned to DeepSeek (CLAUDE.md 2026-04-26 cutover).
+    # Without this preset, both surgeons would collapse to the same
+    # provider and the cross-examination signal goes to zero.
+    #
+    # Uses Anthropic's OpenAI-compatible endpoint (/v1/chat/completions
+    # with Authorization: Bearer), so no SDK dependency or new HTTP
+    # branch is required — the existing _single_query path handles it.
+    # The native Anthropic typed-block content path in _single_query
+    # already supports content as a list-of-blocks if Anthropic returns
+    # that shape on the compat endpoint.
+    #
+    # Default model: claude-haiku-4-5-20251001 (cheapest+fastest tier
+    # per CLAUDE.md). Users wanting higher quality can override via
+    # surgeons.cardiologist.model in .3surgeons.yaml.
+    #
+    # Env var: Context_DNA_Anthropic primary, ANTHROPIC_API_KEY honored
+    # as a fallback by SurgeonConfig.get_api_key() for the anthropic
+    # provider (parity with the deepseek fallback chain).
+    "anthropic": {
+        "provider": "anthropic",
+        "endpoint": "https://api.anthropic.com/v1",
+        "model": "claude-haiku-4-5-20251001",
+        "api_key_env": "Context_DNA_Anthropic",
+    },
 }
 
 
@@ -342,6 +368,14 @@ class SurgeonConfig:
         # DeepSeek-specific convenience fallback chain (HEAD-style).
         if self.provider == "deepseek":
             for alt in ("Context_DNA_Deep_Seek", "Context_DNA_Deepseek", "DEEPSEEK_API_KEY"):
+                v = os.environ.get(alt)
+                if v and len(v) >= 6:
+                    return v
+        # Anthropic convenience fallback (SS2 2026-05-08) — mirrors the
+        # DeepSeek pattern. Lets ANTHROPIC_API_KEY work out-of-the-box
+        # for users who already export it (Anthropic SDK convention).
+        if self.provider == "anthropic":
+            for alt in ("Context_DNA_Anthropic", "ANTHROPIC_API_KEY"):
                 v = os.environ.get(alt)
                 if v and len(v) >= 6:
                     return v
@@ -783,6 +817,8 @@ class Config:
             hint = preset_cfg.api_key_env
             if preset_cfg.provider == "deepseek":
                 hint = f"{preset_cfg.api_key_env} (or DEEPSEEK_API_KEY)"
+            elif preset_cfg.provider == "anthropic":
+                hint = f"{preset_cfg.api_key_env} (or ANTHROPIC_API_KEY)"
             raise MissingProviderKeyError(
                 f"Cardiologist provider '{preset_cfg.provider}' selected but no API "
                 f"key found. Set {hint} in the environment, macOS Keychain, or "

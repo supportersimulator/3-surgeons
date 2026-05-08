@@ -61,11 +61,15 @@ class TestProviderPresets:
         assert preset["api_key_env"] == "Context_DNA_Deepseek"
 
     def test_unknown_provider_raises(self):
+        # SS2 2026-05-08 — was "anthropic", which is now a real preset.
+        # Use a clearly invalid name to keep the contract test meaningful.
         with pytest.raises(ValueError):
-            cardiologist_provider_preset("anthropic")
+            cardiologist_provider_preset("not-a-real-provider")
 
     def test_presets_dict_exposes_both(self):
-        assert set(CARDIOLOGIST_PROVIDER_PRESETS) >= {"openai", "deepseek"}
+        # SS2 2026-05-08 — anthropic added as third option for cross-provider
+        # diversity when openai billing is down and neuro is on deepseek.
+        assert set(CARDIOLOGIST_PROVIDER_PRESETS) >= {"openai", "deepseek", "anthropic"}
 
     def test_openai_to_deepseek_mapping_covers_common_models(self):
         assert OPENAI_TO_DEEPSEEK_MODEL["gpt-4.1-mini"] == "deepseek-chat"

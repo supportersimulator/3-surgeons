@@ -53,13 +53,16 @@ def _detect_ides() -> list[str]:
 @click.option(
     "--cardio-provider",
     "cardio_provider",
-    type=click.Choice(["openai", "deepseek"], case_sensitive=False),
+    type=click.Choice(["openai", "deepseek", "anthropic"], case_sensitive=False),
     default=None,
     help=(
         "Override the Cardiologist provider for this invocation. "
         "openai (default) keeps gpt-4.1-mini; deepseek routes to "
-        "https://api.deepseek.com/v1 with deepseek-chat. Reads "
-        "Context_DNA_Deepseek (or DEEPSEEK_API_KEY) from the env."
+        "https://api.deepseek.com/v1 with deepseek-chat; anthropic routes "
+        "to https://api.anthropic.com/v1 with claude-haiku-4-5-20251001 "
+        "(restores 3-surgeon model diversity when both OpenAI billing is "
+        "down and neuro is pinned to DeepSeek). Reads Context_DNA_Deepseek "
+        "(or DEEPSEEK_API_KEY) / Context_DNA_Anthropic (or ANTHROPIC_API_KEY)."
     ),
 )
 @click.option(
@@ -1158,8 +1161,17 @@ def consult(ctx: click.Context, topic: str, files: tuple, dry_run: bool) -> None
 @cli.command()
 @click.argument("claim")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
+@click.option(
+    "--counter-probe",
+    is_flag=True,
+    help=(
+        "SS1 sycophancy gate: also probe the claim's negation; demote score "
+        "to 0.0 if both surgeons agree with BOTH directions at conf>=0.7. "
+        "Costs ~2x normal consensus. Env: CONTEXT_DNA_CONSENSUS_COUNTER_PROBE=on."
+    ),
+)
 @click.pass_context
-def consensus(ctx: click.Context, claim: str, dry_run: bool) -> None:
+def consensus(ctx: click.Context, claim: str, dry_run: bool, counter_probe: bool) -> None:
     """Confidence-weighted consensus on a claim."""
     if dry_run:
         from three_surgeons.core.dry_run import check_dry_run
@@ -1168,6 +1180,7 @@ def consensus(ctx: click.Context, claim: str, dry_run: bool) -> None:
         return
 
     from three_surgeons.core.cross_exam import SurgeryTeam
+    from three_surgeons.core.counter_probe import is_enabled as _cp_enabled
 
     config: Config = ctx.obj["config"]
     state = create_backend_from_config(config.state)
@@ -1178,8 +1191,11 @@ def consensus(ctx: click.Context, claim: str, dry_run: bool) -> None:
         cardiologist=cardio, neurologist=neuro, evidence=evidence, state=state
     )
 
+    counter_probe_active = _cp_enabled(counter_probe)
     click.echo(f"Consensus on: {claim}\n")
-    result = team.consensus(claim)
+    if counter_probe_active:
+        click.echo("  Counter-probe gate: ON (will probe negation)")
+    result = team.consensus(claim, counter_probe=counter_probe_active)
 
     click.echo(f"  Cardiologist: {result.cardiologist_assessment} "
                f"(confidence={result.cardiologist_confidence:.2f})")
@@ -1187,6 +1203,46 @@ def consensus(ctx: click.Context, claim: str, dry_run: bool) -> None:
                f"(confidence={result.neurologist_confidence:.2f})")
     click.echo(f"  Weighted score: {result.weighted_score:+.2f}")
     click.echo(f"  Total cost: ${result.total_cost:.4f}")
+
+    # Counter-probe verdict (SS1). Only print when the gate actually ran.
+    if getattr(result, "counter_probe_active", False):
+        click.echo()
+        click.echo(
+            f"  Counter-probe negation score: "
+            f"{result.counter_probe_negation_score:+.2f}"
+        )
+        click.echo(
+            f"  Counter-probe cost:           ${result.counter_probe_cost:.4f}"
+        )
+        if result.sycophantic:
+            click.echo(
+                f"  Verdict: NO-GENUINE-CONSENSUS (sycophantic) — "
+                f"effective score demoted from "
+                f"{result.weighted_score:+.2f} to {result.effective_score:+.2f}"
+            )
+            click.echo(f"  Reason: {result.counter_probe_reason}", err=True)
+        elif result.counter_probe_genuine:
+            click.echo(
+                f"  Verdict: GENUINE — effective score {result.effective_score:+.2f} "
+                f"(both surgeons distinguished claim from negation)"
+            )
+        elif result.counter_probe_single_flip:
+            click.echo(
+                f"  Verdict: PARTIAL — effective score {result.effective_score:+.2f} "
+                f"(only one surgeon flipped; confidence reduced)"
+            )
+            click.echo(f"  Reason: {result.counter_probe_reason}", err=True)
+        else:
+            click.echo(
+                f"  Verdict: NO-SIGNAL — effective score {result.effective_score:+.2f}"
+            )
+        # Cost-cap warning (single-call cap is $0.05).
+        if result.total_cost > 0.05:
+            click.echo(
+                f"  ⚠️  Counter-probe combined cost ${result.total_cost:.4f} "
+                f"exceeds $0.05 single-call cap.",
+                err=True,
+            )
 
     # QQ3 diversity canary — stderr-only so machine-parseable stdout stays
     # clean. Aaron greps for the warning; agents parsing stdout don't see it.
