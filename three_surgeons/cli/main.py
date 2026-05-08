@@ -62,8 +62,25 @@ def _detect_ides() -> list[str]:
         "Context_DNA_Deepseek (or DEEPSEEK_API_KEY) from the env."
     ),
 )
+@click.option(
+    "--neuro-provider",
+    "neuro_provider",
+    type=click.Choice(["ollama", "mlx", "deepseek"], case_sensitive=False),
+    default=None,
+    help=(
+        "Override the Neurologist provider for this invocation. "
+        "ollama (default) keeps qwen3:4b on localhost:11434; mlx targets "
+        "localhost:5044; deepseek routes to https://api.deepseek.com/v1 "
+        "with deepseek-chat. Env var CONTEXT_DNA_NEURO_PROVIDER does the "
+        "same fleet-wide. Per CLAUDE.md 2026-04-26 cutover directive."
+    ),
+)
 @click.pass_context
-def cli(ctx: click.Context, cardio_provider: Optional[str]) -> None:
+def cli(
+    ctx: click.Context,
+    cardio_provider: Optional[str],
+    neuro_provider: Optional[str],
+) -> None:
     """3-Surgeons: Multi-model consensus system."""
     ctx.ensure_object(dict)
     config = Config.discover()
@@ -76,6 +93,12 @@ def cli(ctx: click.Context, cardio_provider: Optional[str]) -> None:
         except ValueError as exc:
             raise click.UsageError(str(exc)) from exc
         ctx.obj["cardio_provider_override"] = cardio_provider.lower()
+    if neuro_provider:
+        try:
+            config.apply_neurologist_provider(neuro_provider, require_key=False)
+        except ValueError as exc:
+            raise click.UsageError(str(exc)) from exc
+        ctx.obj["neuro_provider_override"] = neuro_provider.lower()
     ctx.obj["config"] = config
 
 

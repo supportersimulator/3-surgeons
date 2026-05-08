@@ -74,6 +74,71 @@ OPENAI_TO_DEEPSEEK_MODEL: Dict[str, str] = {
 }
 
 
+# ── Neurologist provider presets ─────────────────────────────────────
+#
+# The Neurologist is the "local" surgeon. Default routes to a local
+# OpenAI-compatible backend (ollama qwen3:4b). CLAUDE.md 2026-04-26 directive
+# noted DeepSeek-chat as the steady-state target for both surgeons; this
+# preset table makes the cutover an env-var flip rather than a code edit,
+# parity with the cardio path. Default REMAINS ollama for backward
+# compatibility — set ``CONTEXT_DNA_NEURO_PROVIDER=deepseek`` (or pass
+# ``3s --neuro-provider deepseek``) to flip per-invocation.
+
+NEUROLOGIST_PROVIDER_PRESETS: Dict[str, Dict[str, str]] = {
+    "ollama": {
+        "provider": "ollama",
+        "endpoint": "http://localhost:11434/v1",
+        "model": "qwen3:4b",
+        "api_key_env": "",
+    },
+    "mlx": {
+        "provider": "mlx",
+        "endpoint": "http://localhost:5044/v1",
+        "model": "mlx-community/Qwen3-4B-4bit",
+        "api_key_env": "",
+    },
+    "deepseek": {
+        "provider": "deepseek",
+        "endpoint": "https://api.deepseek.com/v1",
+        "model": "deepseek-chat",
+        "api_key_env": "Context_DNA_Deepseek",
+    },
+}
+
+
+def neurologist_provider_preset(provider: str) -> Dict[str, str]:
+    """Return the neurologist preset dict for ``provider``.
+
+    Raises ``ValueError`` on unknown providers so mis-spelled CLI flags or
+    env vars surface immediately.
+    """
+    key = (provider or "").strip().lower()
+    if key not in NEUROLOGIST_PROVIDER_PRESETS:
+        supported = ", ".join(sorted(NEUROLOGIST_PROVIDER_PRESETS.keys()))
+        raise ValueError(
+            f"Unknown neurologist provider '{provider}'. Supported: {supported}."
+        )
+    return dict(NEUROLOGIST_PROVIDER_PRESETS[key])
+
+
+def make_neurologist_config(
+    provider: str = "ollama",
+    model: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    api_key_env: Optional[str] = None,
+    role: str = "Local intelligence -- pattern recognition, corrigibility",
+) -> "SurgeonConfig":
+    """Build a ``SurgeonConfig`` for the neurologist using a provider preset."""
+    preset = neurologist_provider_preset(provider)
+    return SurgeonConfig(
+        provider=preset["provider"],
+        endpoint=endpoint or preset["endpoint"],
+        model=model or preset["model"],
+        api_key_env=api_key_env if api_key_env is not None else preset["api_key_env"],
+        role=role,
+    )
+
+
 def cardiologist_provider_preset(provider: str) -> Dict[str, str]:
     """Return the cardiologist preset dict for ``provider``.
 
@@ -441,6 +506,19 @@ class Config:
                     raw = {}
                 cfg = cls._merge_into(cfg, raw)
 
+        # Env-var overrides — final layer, highest precedence after CLI flags.
+        # CONTEXT_DNA_NEURO_PROVIDER allows fleet-wide cutover without YAML
+        # edits per CLAUDE.md 2026-04-26 directive. require_key=False here so
+        # `3s probe` / `3s --help` work without keys; commands that actually
+        # call the model surface the key error via the normal path.
+        neuro_env = os.environ.get("CONTEXT_DNA_NEURO_PROVIDER")
+        if neuro_env:
+            try:
+                cfg.apply_neurologist_provider(neuro_env, require_key=False)
+            except ValueError:
+                # Bogus env var — preserve default rather than crash discovery.
+                pass
+
         return cfg
 
     @classmethod
@@ -548,6 +626,44 @@ class Config:
                 f"Cardiologist provider '{preset_cfg.provider}' selected but no API "
                 f"key found. Set {hint} in the environment, macOS Keychain, or "
                 f"AWS Secrets Manager (e.g. /ersim/prod/backend/DEEPSEEK_API_KEY)."
+            )
+        return self
+
+    def apply_neurologist_provider(
+        self,
+        provider: str,
+        require_key: bool = True,
+    ) -> "Config":
+        """Swap the neurologist to a provider preset (ollama | mlx | deepseek).
+
+        Mutates this Config in place and returns ``self`` for chaining.
+        Preserves the neurologist's ``role`` and ``fallbacks``. When
+        ``require_key`` is True (default) and the chosen provider needs a key
+        (e.g. deepseek), raises ``MissingProviderKeyError`` if not resolvable.
+
+        Local providers (ollama/mlx) skip the key check.
+        """
+        preset_cfg = make_neurologist_config(
+            provider=provider,
+            model=None,
+            role=self.neurologist.role
+            or "Local intelligence -- pattern recognition, corrigibility",
+        )
+        preset_cfg.fallbacks = list(self.neurologist.fallbacks or [])
+        self.neurologist = preset_cfg
+
+        if (
+            require_key
+            and preset_cfg.api_key_env
+            and preset_cfg.get_api_key() is None
+        ):
+            hint = preset_cfg.api_key_env
+            if preset_cfg.provider == "deepseek":
+                hint = f"{preset_cfg.api_key_env} (or DEEPSEEK_API_KEY)"
+            raise MissingProviderKeyError(
+                f"Neurologist provider '{preset_cfg.provider}' selected but no API "
+                f"key found. Set {hint} in the environment, macOS Keychain, or "
+                f"AWS Secrets Manager."
             )
         return self
 
