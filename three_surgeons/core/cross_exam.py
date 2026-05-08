@@ -27,6 +27,37 @@ from three_surgeons.core.state import StateBackend
 
 logger = logging.getLogger(__name__)
 
+# Honor THREE_SURGEONS_LOG_LEVEL env var so callers (CLI, wrappers like
+# scripts/3s-brainstorm.sh) can silence cosmetic warnings without losing
+# observability. Counters below stay live regardless of log level.
+# Empty-body parse failures (recoverable via wrapper retry) log at DEBUG
+# by default — the counter is the source of truth for telemetry.
+_LOG_LEVEL_ENV = os.environ.get("THREE_SURGEONS_LOG_LEVEL", "").strip().upper()
+if _LOG_LEVEL_ENV in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+    logger.setLevel(getattr(logging, _LOG_LEVEL_ENV))
+
+# Module-level parse-failure counters (ZSF: every failure observable).
+# Keys:
+#   empty_body — surgeon returned empty/whitespace-only content (recoverable)
+#   bad_json   — non-empty content that did not contain parseable JSON
+#   other      — defensive bucket for unexpected parse paths
+_PARSE_FAILURES = {"empty_body": 0, "bad_json": 0, "other": 0}
+
+
+def get_parse_failure_counters() -> dict:
+    """Return a snapshot of consensus-JSON parse failure counters.
+
+    Public accessor for tests and telemetry. Returns a shallow copy so
+    callers cannot mutate module state.
+    """
+    return dict(_PARSE_FAILURES)
+
+
+def _reset_parse_failure_counters() -> None:
+    """Reset counters. Test-only helper; not part of the public API."""
+    for key in _PARSE_FAILURES:
+        _PARSE_FAILURES[key] = 0
+
 
 def _get_file_policy() -> FileAccessPolicy:
     """Build file access policy from env or cwd. No caching — env may change."""
@@ -1163,8 +1194,25 @@ class SurgeryTeam:
         by extracting the first {...} block.
 
         Returns defaults on failure: confidence=0.0, assessment="unavailable".
+
+        Failure emission policy (LL1, post-KK1 wrapper-retry shipped):
+          - Empty/whitespace body: increment ``empty_body`` counter and log at
+            DEBUG. Wrapper retries (scripts/3s-brainstorm.sh) recover these,
+            so the warning is cosmetic and would leak via 2>&1 capture. The
+            counter remains the source of truth for telemetry.
+          - Non-empty but unparseable body: increment ``bad_json`` and log at
+            WARNING (this IS a real anomaly worth surfacing).
         """
-        text = content.strip()
+        text = content.strip() if content else ""
+        if not text:
+            _PARSE_FAILURES["empty_body"] += 1
+            logger.debug(
+                "Empty consensus body (recoverable via wrapper retry); "
+                "empty_body counter=%d",
+                _PARSE_FAILURES["empty_body"],
+            )
+            return {"confidence": 0.0, "assessment": "unavailable"}
+
         # Try direct parse first
         try:
             data = json.loads(text)
@@ -1188,7 +1236,12 @@ class SurgeryTeam:
             except (json.JSONDecodeError, TypeError, ValueError):
                 pass
 
-        logger.warning("Failed to parse consensus JSON: %s", content[:100])
+        _PARSE_FAILURES["bad_json"] += 1
+        logger.warning(
+            "Failed to parse consensus JSON (bad_json counter=%d): %s",
+            _PARSE_FAILURES["bad_json"],
+            content[:100],
+        )
         return {"confidence": 0.0, "assessment": "unavailable"}
 
     @staticmethod

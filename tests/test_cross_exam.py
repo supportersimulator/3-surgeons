@@ -545,3 +545,147 @@ class TestCrossExamineWithFiles:
             str(call) for call in cardio.query.call_args_list
         )
         assert "def bar" in all_prompts
+
+
+class TestParseConsensusJsonCounters:
+    """LL1: counters + structured logging for `_parse_consensus_json`.
+
+    KK1 shipped wrapper-side retry for empty-body consensus failures.
+    LL1 stops the residual cosmetic warning from leaking to stderr by
+    classifying empty-body failures separately and logging them at DEBUG,
+    while keeping a public counter for telemetry.
+    """
+
+    def setup_method(self):
+        from three_surgeons.core import cross_exam as ce_mod
+
+        ce_mod._reset_parse_failure_counters()
+
+    def test_get_parse_failure_counters_accessor(self):
+        from three_surgeons.core.cross_exam import get_parse_failure_counters
+
+        snapshot = get_parse_failure_counters()
+        assert snapshot == {"empty_body": 0, "bad_json": 0, "other": 0}
+        # Returned dict must be a copy — caller mutation must not bleed back.
+        snapshot["empty_body"] = 999
+        assert get_parse_failure_counters()["empty_body"] == 0
+
+    def test_empty_body_increments_empty_body_counter(self):
+        from three_surgeons.core.cross_exam import (
+            SurgeryTeam,
+            get_parse_failure_counters,
+        )
+
+        result = SurgeryTeam._parse_consensus_json("")
+        assert result == {"confidence": 0.0, "assessment": "unavailable"}
+        assert get_parse_failure_counters()["empty_body"] == 1
+        assert get_parse_failure_counters()["bad_json"] == 0
+
+    def test_whitespace_only_body_counts_as_empty(self):
+        from three_surgeons.core.cross_exam import (
+            SurgeryTeam,
+            get_parse_failure_counters,
+        )
+
+        SurgeryTeam._parse_consensus_json("   \n\t  ")
+        assert get_parse_failure_counters()["empty_body"] == 1
+
+    def test_empty_body_logs_at_debug_not_warning(self, caplog):
+        """Cosmetic warning must NOT leak when body is empty."""
+        import logging
+
+        from three_surgeons.core.cross_exam import SurgeryTeam
+
+        with caplog.at_level(logging.WARNING, logger="three_surgeons.core.cross_exam"):
+            SurgeryTeam._parse_consensus_json("")
+
+        # No WARNING-level records should be emitted for empty body.
+        warning_records = [
+            r for r in caplog.records if r.levelno >= logging.WARNING
+        ]
+        assert warning_records == [], (
+            f"Empty body must not warn; got: {[r.getMessage() for r in warning_records]}"
+        )
+
+    def test_empty_body_debug_message_emitted(self, caplog):
+        import logging
+
+        from three_surgeons.core.cross_exam import SurgeryTeam
+
+        with caplog.at_level(logging.DEBUG, logger="three_surgeons.core.cross_exam"):
+            SurgeryTeam._parse_consensus_json("")
+
+        debug_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno == logging.DEBUG
+        ]
+        assert any("Empty consensus body" in m for m in debug_msgs)
+
+    def test_bad_json_increments_bad_json_counter_and_warns(self, caplog):
+        import logging
+
+        from three_surgeons.core.cross_exam import (
+            SurgeryTeam,
+            get_parse_failure_counters,
+        )
+
+        garbage = "this is not JSON at all, just prose"
+        with caplog.at_level(logging.WARNING, logger="three_surgeons.core.cross_exam"):
+            result = SurgeryTeam._parse_consensus_json(garbage)
+
+        assert result == {"confidence": 0.0, "assessment": "unavailable"}
+        assert get_parse_failure_counters()["bad_json"] == 1
+        assert get_parse_failure_counters()["empty_body"] == 0
+
+        warning_msgs = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelno >= logging.WARNING
+        ]
+        assert any("Failed to parse consensus JSON" in m for m in warning_msgs)
+
+    def test_valid_json_does_not_increment_counters(self):
+        from three_surgeons.core.cross_exam import (
+            SurgeryTeam,
+            get_parse_failure_counters,
+        )
+
+        result = SurgeryTeam._parse_consensus_json(
+            '{"confidence": 0.7, "assessment": "agree"}'
+        )
+        assert result == {"confidence": 0.7, "assessment": "agree"}
+        snap = get_parse_failure_counters()
+        assert snap == {"empty_body": 0, "bad_json": 0, "other": 0}
+
+    def test_valid_json_in_prose_does_not_increment_counters(self):
+        from three_surgeons.core.cross_exam import (
+            SurgeryTeam,
+            get_parse_failure_counters,
+        )
+
+        wrapped = (
+            'Thinking... here is my answer:\n'
+            '{"confidence": 0.4, "assessment": "uncertain"}\n'
+            'End of analysis.'
+        )
+        result = SurgeryTeam._parse_consensus_json(wrapped)
+        assert result["assessment"] == "uncertain"
+        assert get_parse_failure_counters() == {
+            "empty_body": 0,
+            "bad_json": 0,
+            "other": 0,
+        }
+
+    def test_counters_accumulate_across_calls(self):
+        from three_surgeons.core.cross_exam import (
+            SurgeryTeam,
+            get_parse_failure_counters,
+        )
+
+        SurgeryTeam._parse_consensus_json("")
+        SurgeryTeam._parse_consensus_json("")
+        SurgeryTeam._parse_consensus_json("not json")
+        snap = get_parse_failure_counters()
+        assert snap["empty_body"] == 2
+        assert snap["bad_json"] == 1
