@@ -162,3 +162,136 @@ class TestExtractThinking:
         response, thinking = extract_thinking(text)
         assert response == "the answer"
         assert thinking == ""
+
+
+class TestGPULockedAdapterContentExtraction:
+    """Adapter must tolerate Qwen3 reasoning-only responses (HH4 root cause).
+
+    The GPU-locked adapter previously did
+    ``data["choices"][0]["message"]["content"]`` which raises ``KeyError``
+    when ``mlx_lm.server`` returns a Qwen3 thinking-mode response with
+    ``message.reasoning`` instead of ``message.content``. This breaks
+    Neurologist consensus. These tests pin the fix.
+    """
+
+    def _make_adapter(self, monkeypatch, payload: dict, tmp_path):
+        """Build a make_gpu_locked_adapter wired to a fake httpx.Client."""
+        from three_surgeons.core import priority_queue as pq
+        from three_surgeons.core.config import SurgeonConfig
+
+        class _FakeResp:
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> dict:
+                return payload
+
+        class _FakeClient:
+            def __init__(self, *a, **kw) -> None:
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc) -> None:
+                return None
+
+            def post(self, url, json=None, headers=None):
+                return _FakeResp()
+
+        # Replace httpx in the priority_queue module's deferred import path
+        import httpx as real_httpx
+        monkeypatch.setattr(real_httpx, "Client", _FakeClient)
+
+        # Reset ZSF counters so each test sees a fresh slate
+        pq._reset_gpu_adapter_metrics()
+
+        cfg = SurgeonConfig(
+            provider="mlx",
+            endpoint="http://127.0.0.1:5044/v1",
+            model="qwen3-4b",
+            api_key_env="",
+            role="neurologist",
+        )
+        adapter = pq.make_gpu_locked_adapter(cfg, lock_dir=tmp_path)
+        return adapter, pq
+
+    def test_legacy_content_only_response(self, monkeypatch, tmp_path) -> None:
+        """OpenAI/DeepSeek shape with ``content`` key still works."""
+        payload = {
+            "choices": [{"message": {"role": "assistant", "content": "hello world"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+        }
+        adapter, pq = self._make_adapter(monkeypatch, payload, tmp_path)
+        resp = adapter("sys", "prompt", 64, 0.2, 5.0)
+        assert resp.ok is True
+        assert resp.content == "hello world"
+        # Legacy path -- no reasoning-only event, no empty event
+        metrics = pq.gpu_adapter_metrics()
+        assert metrics["empty_content"] == 0
+        assert metrics["reasoning_only_responses"] == 0
+
+    def test_qwen3_reasoning_only_response(self, monkeypatch, tmp_path) -> None:
+        """Qwen3 thinking-mode: ``reasoning`` present, ``content`` absent.
+
+        Pre-fix this raised ``KeyError: 'content'`` and broke 3-surgeon
+        consensus (HH4 audit). Post-fix, content surfaces wrapped in
+        ``<think>...</think>`` so ``strip_think_tags`` can clean it.
+        """
+        payload = {
+            "choices": [
+                {"message": {"role": "assistant", "reasoning": "I am thinking..."}}
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 4},
+        }
+        adapter, pq = self._make_adapter(monkeypatch, payload, tmp_path)
+        resp = adapter("sys", "prompt", 64, 0.2, 5.0)
+        assert resp.ok is True
+        # Reasoning is surfaced (think-tag wrapped) so neurologist stays usable
+        assert resp.content == "<think>I am thinking...</think>"
+        metrics = pq.gpu_adapter_metrics()
+        assert metrics["reasoning_only_responses"] == 1
+        assert metrics["empty_content"] == 0
+
+    def test_both_content_and_reasoning_prefers_content(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """When both fields are present, ``content`` wins (backwards-compat)."""
+        payload = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "final answer",
+                        "reasoning": "scratch work",
+                    }
+                }
+            ],
+            "usage": {},
+        }
+        adapter, pq = self._make_adapter(monkeypatch, payload, tmp_path)
+        resp = adapter("sys", "prompt", 64, 0.2, 5.0)
+        assert resp.ok is True
+        assert resp.content == "final answer"
+        metrics = pq.gpu_adapter_metrics()
+        assert metrics["reasoning_only_responses"] == 0
+
+    def test_neither_content_nor_reasoning_returns_empty_and_bumps_counter(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Pathological response: empty fallback + ZSF counter increment.
+
+        ZSF: silent empty content is forbidden; the counter MUST advance so
+        ops/health channels can see the failure mode.
+        """
+        payload = {
+            "choices": [{"message": {"role": "assistant"}}],
+            "usage": {},
+        }
+        adapter, pq = self._make_adapter(monkeypatch, payload, tmp_path)
+        resp = adapter("sys", "prompt", 64, 0.2, 5.0)
+        # ok=True because HTTP succeeded; content is empty by design
+        assert resp.ok is True
+        assert resp.content == ""
+        metrics = pq.gpu_adapter_metrics()
+        assert metrics["empty_content"] == 1

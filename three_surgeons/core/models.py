@@ -38,6 +38,65 @@ _REASONING_MODEL_RE = re.compile(
 _JSON_MODE_PROVIDERS = frozenset({"openai", "deepseek", "groq"})
 
 
+def _extract_content(data: dict) -> str:
+    """Extract text content from an /v1/chat/completions response payload.
+
+    Handles the standard OpenAI shape and the common variants emitted by
+    local servers (MLX, llama.cpp, Ollama):
+      - choices[0].message.content      -- OpenAI / DeepSeek / vLLM
+      - choices[0].text                  -- legacy completions / some MLX builds
+      - choices[0].delta.content         -- streamed-shape echoed as final
+      - message.content                  -- single-choice non-array variants
+      - content                          -- bare-content shorthand
+
+    Returns an empty string when no recognised field is present rather than
+    raising — callers compare ok=True with content for downstream behaviour
+    and a missing payload should surface as ``FAIL -- empty content`` rather
+    than ``KeyError: 'choices'``.
+    """
+    if not isinstance(data, dict):
+        return ""
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            msg = first.get("message")
+            if isinstance(msg, dict):
+                value = msg.get("content")
+                if isinstance(value, str) and value:
+                    return value
+                # MLX (mlx-lm.server >=0.31) emits Qwen3 reasoning into a
+                # ``reasoning`` field instead of inlining <think>...</think>
+                # in ``content``. When the model finishes mid-thought the
+                # ``content`` field is missing or empty entirely; surface the
+                # reasoning so health checks see *something* and downstream
+                # strip_think_tags() can clean it up later.
+                reasoning = msg.get("reasoning")
+                if isinstance(reasoning, str) and reasoning:
+                    if isinstance(value, str) and value:
+                        return value
+                    return f"<think>{reasoning}</think>"
+                if isinstance(value, str):
+                    return value
+            value = first.get("text")
+            if isinstance(value, str):
+                return value
+            delta = first.get("delta")
+            if isinstance(delta, dict):
+                value = delta.get("content")
+                if isinstance(value, str):
+                    return value
+    msg = data.get("message")
+    if isinstance(msg, dict):
+        value = msg.get("content")
+        if isinstance(value, str):
+            return value
+    value = data.get("content")
+    if isinstance(value, str):
+        return value
+    return ""
+
+
 def strip_think_tags(text: str) -> str:
     """Remove CoT/<think>-style reasoning wrappers from LLM output.
 
@@ -332,51 +391,57 @@ class LLMProvider:
             latency_ms = int((time.monotonic() - t0) * 1000)
 
             data = resp.json()
-            choice = data["choices"][0]
-            finish_reason = str(choice.get("finish_reason") or "")
-            # Layer 1: provider-aware extraction. Reasoning models split CoT
-            # into a separate `reasoning_content` field — preserve it on the
-            # response (multi-turn callers can re-inject) but use `content`
-            # for the primary answer string.
-            msg = choice["message"]
-            raw_content = msg.get("content") or ""
-            # Some providers (Anthropic native, future ones) return content as
-            # a list of typed blocks: [{"type": "text", "text": "..."},
-            # {"type": "thinking", "thinking": "..."}]. Concatenate text
-            # blocks; route thinking blocks into reasoning_content.
+            # MERGE-RESOLVE 2026-05-08: combine Cycle-10 inline hardening (HEAD)
+            # with feat-branch _extract_content helper. Helper covers field-name
+            # variants (text, delta.content, bare content, message.reasoning).
+            # Inline branch then layers Cycle-10's content-as-typed-blocks
+            # handling (Anthropic native) + reasoning_content fallback.
+            choice = data["choices"][0] if isinstance(data.get("choices"), list) and data.get("choices") else {}
+            finish_reason = str(choice.get("finish_reason") or "") if isinstance(choice, dict) else ""
+            msg = choice.get("message") if isinstance(choice, dict) else None
             content_blocks: Optional[List[Dict]] = None
-            if isinstance(raw_content, list):
-                content_blocks = [b for b in raw_content if isinstance(b, dict)]
-                text_parts: List[str] = []
-                thinking_parts: List[str] = []
-                for block in content_blocks:
-                    btype = block.get("type", "")
-                    if btype in ("text", "output_text"):
-                        text_parts.append(str(block.get("text", "")))
-                    elif btype in ("thinking", "reasoning"):
-                        thinking_parts.append(str(block.get(btype, "") or block.get("text", "")))
-                    # NOTE: tool_use, tool_result, image, etc. blocks are
-                    # preserved on `content_blocks` for callers — NOT silently
-                    # dropped. Tool-using agents inspect content_blocks
-                    # directly to detect tool invocations.
-                content = "".join(text_parts)
-                inline_reasoning = "\n".join(p for p in thinking_parts if p)
+            if isinstance(msg, dict):
+                raw_content = msg.get("content")
+                if isinstance(raw_content, list):
+                    # Anthropic-native typed-block path (Cycle-10 layer).
+                    content_blocks = [b for b in raw_content if isinstance(b, dict)]
+                    text_parts: List[str] = []
+                    thinking_parts: List[str] = []
+                    for block in content_blocks:
+                        btype = block.get("type", "")
+                        if btype in ("text", "output_text"):
+                            text_parts.append(str(block.get("text", "")))
+                        elif btype in ("thinking", "reasoning"):
+                            thinking_parts.append(str(block.get(btype, "") or block.get("text", "")))
+                        # tool_use/tool_result/image blocks preserved on
+                        # content_blocks for callers — never silently dropped.
+                    content = "".join(text_parts)
+                    inline_reasoning = "\n".join(p for p in thinking_parts if p)
+                    reasoning_content = (
+                        str(msg.get("reasoning_content") or "") or inline_reasoning
+                    )
+                    if not content and reasoning_content:
+                        content = (
+                            reasoning_content.split("\n\n")[-1]
+                            if "\n\n" in reasoning_content
+                            else reasoning_content
+                        )
+                else:
+                    # Standard OpenAI/DeepSeek/MLX path — delegate to helper
+                    # (handles content / message.reasoning / text / delta).
+                    content = _extract_content(data)
+                    reasoning_content = str(msg.get("reasoning_content") or "")
+                    if not content and reasoning_content:
+                        content = (
+                            reasoning_content.split("\n\n")[-1]
+                            if "\n\n" in reasoning_content
+                            else reasoning_content
+                        )
             else:
-                content = str(raw_content)
-                inline_reasoning = ""
-            reasoning_content = (
-                str(msg.get("reasoning_content") or "") or inline_reasoning
-            )
-            # Defensive: if `content` is empty but reasoning_content present,
-            # use last paragraph of reasoning as a fallback (rare; truncation).
-            if not content and reasoning_content:
-                content = (
-                    reasoning_content.split("\n\n")[-1]
-                    if "\n\n" in reasoning_content
-                    else reasoning_content
-                )
-            # Universal CoT-tag strip (all providers, not just is_local) —
-            # some hosted models inline <think> too.
+                content = _extract_content(data)
+                reasoning_content = ""
+            # Universal CoT-tag strip — Cycle-10 made this all-providers, not
+            # just is_local, since some hosted models inline <think> too.
             content = strip_think_tags(content)
 
             usage = data.get("usage", {})
@@ -466,11 +531,19 @@ class LLMProvider:
             )
 
     def ping(self, timeout_s: float = 5.0) -> LLMResponse:
-        """Quick health check -- asks the model to say 'operational'."""
+        """Quick health check -- asks the model to say 'operational'.
+
+        Local reasoning models (Qwen3, DeepSeek-R1) burn many tokens inside
+        <think> blocks before emitting any visible content, so ``max_tokens``
+        is sized for them; remote chat models simply ignore the extra
+        headroom and stop at their natural EOS. ``strip_think_tags`` removes
+        the reasoning before callers see the response.
+        """
+        max_tokens = 256 if self._is_local else 32
         return self.query(
             system="You are a health check responder.",
             prompt="Say 'operational' in one word.",
-            max_tokens=32,
+            max_tokens=max_tokens,
             timeout_s=timeout_s,
         )
 

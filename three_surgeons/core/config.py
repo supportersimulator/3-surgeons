@@ -23,6 +23,104 @@ LOCAL_BACKENDS = [
     ("lmstudio", 1234, "/v1/models"),
 ]
 
+# ZSF: keychain-fallback observability counter (merge-resolve 2026-05-08).
+_KEYCHAIN_ERRORS: Dict[str, Any] = {"count": 0, "last": ""}
+
+
+# ── Cardiologist provider presets ─────────────────────────────────────
+#
+# The Cardiologist is the external (cloud) surgeon in the default 3-Surgeons
+# deployment. Historically it has been pinned to OpenAI gpt-4.1-mini. These
+# presets let users flip the Cardiologist to an OpenAI-compatible drop-in
+# (currently DeepSeek) without editing YAML — either via the ``3s
+# --cardio-provider=deepseek`` CLI flag or a ``surgeons.cardiologist.provider``
+# value in ``.3surgeons.yaml``.
+#
+# OpenAI stays the default for backward compatibility. DeepSeek uses the
+# OpenAI-compatible ``/v1/chat/completions`` endpoint so no adapter changes
+# are needed — only routing (endpoint + model + api_key_env).
+
+CARDIOLOGIST_PROVIDER_PRESETS: Dict[str, Dict[str, str]] = {
+    "openai": {
+        "provider": "openai",
+        "endpoint": "https://api.openai.com/v1",
+        "model": "gpt-4.1-mini",
+        "api_key_env": "Context_DNA_OPENAI",
+    },
+    "deepseek": {
+        "provider": "deepseek",
+        "endpoint": "https://api.deepseek.com/v1",
+        # gpt-4.1-mini / gpt-4o-mini → deepseek-chat (general cross-examination);
+        # users who want o1-mini-style reasoning can set model=deepseek-reasoner
+        # in their YAML.
+        "model": "deepseek-chat",
+        # Primary env var — DEEPSEEK_API_KEY is also honored as a fallback
+        # by SurgeonConfig.get_api_key() for the DeepSeek provider.
+        "api_key_env": "Context_DNA_Deepseek",
+    },
+}
+
+
+# Map common OpenAI cardiologist models to their DeepSeek equivalents so
+# callers can translate a YAML model string when flipping providers.
+OPENAI_TO_DEEPSEEK_MODEL: Dict[str, str] = {
+    "gpt-4.1-mini": "deepseek-chat",
+    "gpt-4o-mini": "deepseek-chat",
+    "gpt-4.1-nano": "deepseek-chat",
+    "gpt-4.1": "deepseek-chat",
+    "o1-mini": "deepseek-reasoner",
+    "o3-mini": "deepseek-reasoner",
+    "o4-mini": "deepseek-reasoner",
+}
+
+
+def cardiologist_provider_preset(provider: str) -> Dict[str, str]:
+    """Return the cardiologist preset dict for ``provider``.
+
+    Raises ``ValueError`` for unknown providers so mis-spelled CLI flags
+    surface immediately rather than silently falling back to OpenAI.
+    """
+    key = (provider or "").strip().lower()
+    if key not in CARDIOLOGIST_PROVIDER_PRESETS:
+        supported = ", ".join(sorted(CARDIOLOGIST_PROVIDER_PRESETS.keys()))
+        raise ValueError(
+            f"Unknown cardiologist provider '{provider}'. Supported: {supported}."
+        )
+    return dict(CARDIOLOGIST_PROVIDER_PRESETS[key])
+
+
+def make_cardiologist_config(
+    provider: str = "openai",
+    model: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    api_key_env: Optional[str] = None,
+    role: str = "External perspective -- cross-examination, evidence",
+) -> "SurgeonConfig":
+    """Build a ``SurgeonConfig`` for the cardiologist using a provider preset.
+
+    ``openai`` (default) preserves the legacy behavior. ``deepseek`` routes to
+    the DeepSeek OpenAI-compatible endpoint. Any field can be overridden —
+    when ``model`` is left ``None`` while flipping from an OpenAI model name,
+    ``OPENAI_TO_DEEPSEEK_MODEL`` translates it automatically.
+    """
+    preset = cardiologist_provider_preset(provider)
+    resolved_model = model or preset["model"]
+    # Auto-translate OpenAI-style model names when the caller asks for
+    # DeepSeek but passed an OpenAI model string.
+    if preset["provider"] == "deepseek" and resolved_model in OPENAI_TO_DEEPSEEK_MODEL:
+        resolved_model = OPENAI_TO_DEEPSEEK_MODEL[resolved_model]
+    return SurgeonConfig(
+        provider=preset["provider"],
+        endpoint=endpoint or preset["endpoint"],
+        model=resolved_model,
+        api_key_env=api_key_env or preset["api_key_env"],
+        role=role,
+    )
+
+
+class MissingProviderKeyError(RuntimeError):
+    """Raised when a cardiologist provider is selected but its API key is absent."""
+
 
 def detect_local_backend(timeout_s: float = 2.0) -> list[dict]:
     """Probe common local LLM ports and return detected backends.
@@ -65,21 +163,55 @@ class SurgeonConfig:
     fallbacks: List[Dict[str, str]] = field(default_factory=list)
 
     def get_api_key(self) -> Optional[str]:
-        """Read API key from the environment variable.
+        """Read API key from environment, then macOS keychain (L2 finding).
 
-        Returns None if the env var is missing or the value is < 6 characters.
-        For DeepSeek, falls back through multiple env var names + DEEPSEEK_API_KEY.
+        MERGE-RESOLVE 2026-05-08: combine HEAD's DeepSeek alt-env-var chain
+        with feat-branch's macOS keychain fallback (3-tier resolution).
+
+        Resolution order:
+          1. Configured ``api_key_env`` env var
+          2. For DeepSeek: alt env var names (Context_DNA_Deep_Seek,
+             Context_DNA_Deepseek, DEEPSEEK_API_KEY)
+          3. macOS keychain — ``security find-generic-password`` with two
+             service-name patterns: -s <api_key_env> and
+             -s fleet-nerve -a <api_key_env>
+
+        Returns None if all three miss or yield < 6 characters.
         """
-        value = os.environ.get(self.api_key_env)
-        if (value is None or len(value) < 6) and self.provider == "deepseek":
-            # Fallback chain for DeepSeek key
+        primary = os.environ.get(self.api_key_env) if self.api_key_env else None
+        if primary is not None and len(primary) >= 6:
+            return primary
+        # DeepSeek-specific convenience fallback chain (HEAD-style).
+        if self.provider == "deepseek":
             for alt in ("Context_DNA_Deep_Seek", "Context_DNA_Deepseek", "DEEPSEEK_API_KEY"):
                 v = os.environ.get(alt)
                 if v and len(v) >= 6:
                     return v
-        if value is None or len(value) < 6:
-            return None
-        return value
+        # Keychain fallback (feat-style) — for launchd/hooks/xbar processes
+        # that lack interactive shell env. Tries 2 service-name patterns:
+        #   1. -s <api_key_env>                  (service == env var name)
+        #   2. -s fleet-nerve -a <api_key_env>   (RACE/CLAUDE.md convention)
+        if self.api_key_env:
+            try:
+                import subprocess
+                attempts = [
+                    ["security", "find-generic-password", "-s", self.api_key_env, "-w"],
+                    ["security", "find-generic-password",
+                     "-s", "fleet-nerve", "-a", self.api_key_env, "-w"],
+                ]
+                for cmd in attempts:
+                    rc = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+                    if rc.returncode == 0:
+                        val = (rc.stdout or "").strip()
+                        if len(val) >= 6:
+                            return val
+            except (subprocess.SubprocessError, OSError, FileNotFoundError) as exc:
+                # ZSF (post-merge tightening): explicit exception types instead
+                # of bare Exception. Sandbox/missing-entry/timeout all map here.
+                # Caller already handles None as "no key".
+                _KEYCHAIN_ERRORS["count"] = _KEYCHAIN_ERRORS.get("count", 0) + 1
+                _KEYCHAIN_ERRORS["last"] = str(exc)
+        return None
 
     def get_fallback_configs(self) -> List["SurgeonConfig"]:
         """Convert fallback dicts from YAML into SurgeonConfig objects."""
@@ -384,6 +516,40 @@ class Config:
             cfg.telemetry = _merge_dataclass(cfg.telemetry, telemetry_raw)
 
         return cfg
+
+    def apply_cardiologist_provider(
+        self,
+        provider: str,
+        require_key: bool = True,
+    ) -> "Config":
+        """Swap the cardiologist to a provider preset (openai | deepseek).
+
+        Mutates this Config in place and returns ``self`` for chaining.
+        Preserves the cardiologist's ``role`` and ``fallbacks``. When
+        ``require_key`` is True (the default), raises ``MissingProviderKeyError``
+        if the resulting provider cannot resolve an API key from the
+        environment — this gives CLI users an immediate, actionable error.
+        """
+        preset_cfg = make_cardiologist_config(
+            provider=provider,
+            # If the user YAML specifies an OpenAI model and we're flipping
+            # to DeepSeek, auto-translate — otherwise keep their override.
+            model=None,
+            role=self.cardiologist.role or "External perspective -- cross-examination, evidence",
+        )
+        preset_cfg.fallbacks = list(self.cardiologist.fallbacks or [])
+        self.cardiologist = preset_cfg
+
+        if require_key and preset_cfg.get_api_key() is None:
+            hint = preset_cfg.api_key_env
+            if preset_cfg.provider == "deepseek":
+                hint = f"{preset_cfg.api_key_env} (or DEEPSEEK_API_KEY)"
+            raise MissingProviderKeyError(
+                f"Cardiologist provider '{preset_cfg.provider}' selected but no API "
+                f"key found. Set {hint} in the environment, macOS Keychain, or "
+                f"AWS Secrets Manager (e.g. /ersim/prod/backend/DEEPSEEK_API_KEY)."
+            )
+        return self
 
 
 def _merge_surgeon(default: SurgeonConfig, overrides: Dict[str, Any]) -> SurgeonConfig:

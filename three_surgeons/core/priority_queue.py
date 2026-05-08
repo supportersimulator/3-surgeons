@@ -441,6 +441,28 @@ def _is_pid_alive(pid: int) -> bool:
 DEFAULT_LOCK_DIR = Path("/tmp/3surgeons")
 
 
+# ── ZSF observability counters ────────────────────────────────────────
+#
+# These module-level counters surface adapter-level extraction issues so a
+# Qwen3 reasoning-mode response with no usable text doesn't silently produce
+# an empty string. Read via priority_queue.gpu_adapter_metrics().
+_GPU_ADAPTER_METRICS: Dict[str, int] = {
+    "empty_content": 0,            # _extract_content returned ""
+    "reasoning_only_responses": 0, # response had reasoning but no content key
+}
+
+
+def gpu_adapter_metrics() -> Dict[str, int]:
+    """Return a snapshot of GPU-locked adapter ZSF counters."""
+    return dict(_GPU_ADAPTER_METRICS)
+
+
+def _reset_gpu_adapter_metrics() -> None:
+    """Reset counters (test-only helper)."""
+    for k in list(_GPU_ADAPTER_METRICS):
+        _GPU_ADAPTER_METRICS[k] = 0
+
+
 def make_gpu_locked_adapter(
     config: "SurgeonConfig",
     lock_dir: Optional[Path] = None,
@@ -462,7 +484,7 @@ def make_gpu_locked_adapter(
     """
     import httpx as _httpx  # deferred so import cost is only paid when used
 
-    from three_surgeons.core.models import LLMResponse
+    from three_surgeons.core.models import LLMResponse, _extract_content
 
     _lock_dir = lock_dir or DEFAULT_LOCK_DIR
     _lock_dir.mkdir(parents=True, exist_ok=True)
@@ -507,7 +529,24 @@ def make_gpu_locked_adapter(
             latency_ms = int((time.monotonic() - t0) * 1000)
 
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
+            # Robust extraction: handles OpenAI shape, Qwen3 reasoning-only
+            # responses (mlx_lm.server emits message.reasoning when the model
+            # finishes mid-thought with no message.content), and several other
+            # local-server variants. Mirrors models._single_query so the
+            # GPU-locked adapter never raises KeyError on a Qwen3 thinking
+            # response (HH4 root cause). ZSF: empty extraction bumps a
+            # counter so silent failures stay observable.
+            content = _extract_content(data)
+            if not content:
+                _GPU_ADAPTER_METRICS["empty_content"] += 1
+            else:
+                # Sniff: did we recover from a reasoning-only response?
+                try:
+                    msg = data["choices"][0]["message"]
+                    if isinstance(msg, dict) and not msg.get("content") and msg.get("reasoning"):
+                        _GPU_ADAPTER_METRICS["reasoning_only_responses"] += 1
+                except (KeyError, IndexError, TypeError):
+                    pass
             usage = data.get("usage", {})
 
             return LLMResponse(
