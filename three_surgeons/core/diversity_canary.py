@@ -39,6 +39,20 @@ DIVERSITY_COUNTERS: Dict[str, int] = {
 }
 
 
+def _persist_counters_zsf() -> None:
+    """ZSF best-effort: surface counters to disk for the fleet daemon.
+
+    See ``zsf_counter_persist`` for rationale. Lazy import keeps this
+    file independent at module-load time. Failures inside the persister
+    are absorbed there; this wrapper protects against import errors.
+    """
+    try:
+        from three_surgeons.core.zsf_counter_persist import persist_counters
+        persist_counters()
+    except Exception:  # noqa: BLE001 — ZSF
+        pass
+
+
 def _safe_get(obj: Any, *names: str, default: str = "") -> str:
     """Best-effort attribute/key lookup. Always returns a string."""
     if obj is None:
@@ -82,6 +96,7 @@ def evaluate_diversity(
     )
 
     if _disabled():
+        _persist_counters_zsf()
         return {"yellow": False, "reasons": []}
 
     reasons: List[str] = []
@@ -145,6 +160,9 @@ def evaluate_diversity(
         DIVERSITY_COUNTERS["yellow_signals_total"] = (
             DIVERSITY_COUNTERS.get("yellow_signals_total", 0) + 1
         )
+    # ZSF: persist the post-evaluation snapshot so the daemon's /health
+    # reflects the latest yellow / agreement signal even if this PID dies.
+    _persist_counters_zsf()
     return {"yellow": yellow, "reasons": reasons}
 
 

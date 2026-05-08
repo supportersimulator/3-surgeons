@@ -52,6 +52,21 @@ def reset_neuro_fallback_counters() -> None:
         _NEURO_FALLBACK_COUNTERS[k] = 0
 
 
+def _persist_counters_zsf() -> None:
+    """ZSF best-effort: surface counters to disk for the fleet daemon.
+
+    See ``zsf_counter_persist`` for rationale (RR1 2026-05-08). Lazy
+    import keeps this module independent at module-load time. Failures
+    inside the persister are absorbed there; this wrapper protects
+    against import errors so no caller of a counter bump can crash.
+    """
+    try:
+        from three_surgeons.core.zsf_counter_persist import persist_counters
+        persist_counters()
+    except Exception:  # noqa: BLE001 — ZSF
+        pass
+
+
 # ── Cardiologist provider presets ─────────────────────────────────────
 #
 # The Cardiologist is the external (cloud) surgeon in the default 3-Surgeons
@@ -354,6 +369,7 @@ class SurgeonConfig:
                 # Caller already handles None as "no key".
                 _KEYCHAIN_ERRORS["count"] = _KEYCHAIN_ERRORS.get("count", 0) + 1
                 _KEYCHAIN_ERRORS["last"] = str(exc)
+                _persist_counters_zsf()
         return None
 
     def get_fallback_configs(self) -> List["SurgeonConfig"]:
@@ -600,6 +616,7 @@ class Config:
             _NEURO_FALLBACK_COUNTERS["default_kept"] = (
                 _NEURO_FALLBACK_COUNTERS.get("default_kept", 0) + 1
             )
+            _persist_counters_zsf()
         else:
             # QQ1 2026-05-08 — no explicit override → walk the fallback chain
             # so degraded nodes silently upgrade to the next reachable provider
@@ -730,11 +747,13 @@ class Config:
                 _NEURO_FALLBACK_COUNTERS[provider_key] = (
                     _NEURO_FALLBACK_COUNTERS.get(provider_key, 0) + 1
                 )
+                _persist_counters_zsf()
                 return self
         # Nothing reachable. Record the miss so dashboards see degraded fleet.
         _NEURO_FALLBACK_COUNTERS["no_provider_reachable"] = (
             _NEURO_FALLBACK_COUNTERS.get("no_provider_reachable", 0) + 1
         )
+        _persist_counters_zsf()
         return self
 
     def apply_cardiologist_provider(
