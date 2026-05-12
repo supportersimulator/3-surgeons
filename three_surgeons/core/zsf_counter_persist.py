@@ -68,6 +68,8 @@ def persist_counters() -> None:
 
         snapshot = {
             "neuro_fallback": dict(_cfg._NEURO_FALLBACK_COUNTERS),
+            # AAA1 2026-05-12 — surface cardiologist fallback to /health.
+            "cardio_fallback": dict(_cfg._CARDIO_FALLBACK_COUNTERS),
             "diversity": dict(_dc.DIVERSITY_COUNTERS),
             "keychain_errors": dict(_cfg._KEYCHAIN_ERRORS),
             "persist_self": dict(_PERSIST_SELF),

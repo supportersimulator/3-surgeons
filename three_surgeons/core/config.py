@@ -40,6 +40,20 @@ _NEURO_FALLBACK_COUNTERS: Dict[str, int] = {
     "no_provider_reachable": 0,  # all probes failed AND no deepseek key
 }
 
+# ZSF: cardiologist fallback-chain observability counters (AAA1 2026-05-12).
+# Mirrors the neurologist counters above. RR5/WW5/ZZ5 documented the user
+# pain: Anthropic billing inactive → cardio hard-pin → both surgeons end
+# up DeepSeek → sycophancy. This counter set surfaces silent failover so
+# operators can spot fleet-wide degradation events. Surfaced via
+# /health.zsf_counters.three_surgeons.cardio_fallback (file-backed).
+_CARDIO_FALLBACK_COUNTERS: Dict[str, int] = {
+    "openai": 0,
+    "anthropic": 0,
+    "deepseek": 0,
+    "default_kept": 0,  # no fallback ran — env var/YAML override honored
+    "no_provider_reachable": 0,  # entire chain missed (no keys, no probes)
+}
+
 
 def get_neuro_fallback_counters() -> Dict[str, int]:
     """Return a snapshot of the neurologist fallback-chain counters."""
@@ -50,6 +64,17 @@ def reset_neuro_fallback_counters() -> None:
     """Reset counters — used by tests to isolate runs."""
     for k in _NEURO_FALLBACK_COUNTERS:
         _NEURO_FALLBACK_COUNTERS[k] = 0
+
+
+def get_cardio_fallback_counters() -> Dict[str, int]:
+    """Return a snapshot of the cardiologist fallback-chain counters."""
+    return dict(_CARDIO_FALLBACK_COUNTERS)
+
+
+def reset_cardio_fallback_counters() -> None:
+    """Reset counters — used by tests to isolate runs."""
+    for k in _CARDIO_FALLBACK_COUNTERS:
+        _CARDIO_FALLBACK_COUNTERS[k] = 0
 
 
 def _persist_counters_zsf() -> None:
@@ -138,6 +163,20 @@ OPENAI_TO_DEEPSEEK_MODEL: Dict[str, str] = {
     "o3-mini": "deepseek-reasoner",
     "o4-mini": "deepseek-reasoner",
 }
+
+
+# Auto-fallback chain order for the cardiologist (AAA1 2026-05-12).
+# Mirrors NEUROLOGIST_FALLBACK_CHAIN (QQ1 2026-05-08).
+# Order rationale:
+#   1. openai     — historical default; preserves legacy behavior on healthy
+#                   nodes (key present + endpoint reachable).
+#   2. anthropic  — diversity tier (SS2 preset). Picked when OpenAI billing
+#                   fails (RR5 root cause) but Anthropic key still works.
+#   3. deepseek   — cheap, reliable cloud fallback. Used when neither OpenAI
+#                   nor Anthropic respond — preserves single-cloud-surgeon
+#                   consensus rather than collapsing to single-surgeon.
+# Walked only when no explicit env-var/CLI/YAML override is in effect.
+CARDIOLOGIST_FALLBACK_CHAIN: List[str] = ["openai", "anthropic", "deepseek"]
 
 
 # ── Neurologist provider presets ─────────────────────────────────────
@@ -301,6 +340,44 @@ def _probe_provider_reachable(provider_key: str, timeout_s: float = 2.0) -> bool
         resp = httpx.get(url, timeout=timeout_s)
         return resp.status_code == 200
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError, OSError, ValueError):
+        return False
+    except Exception:  # noqa: BLE001 — ZSF outer guard, never crash discovery
+        return False
+
+
+def _probe_cardio_provider_reachable(provider_key: str, timeout_s: float = 2.0) -> bool:
+    """Return True if the given cardiologist preset is reachable.
+
+    AAA1 2026-05-12 — mirrors ``_probe_provider_reachable`` (QQ1) for the
+    cardio chain. All three current cardio providers (openai, anthropic,
+    deepseek) are cloud services, so the probe is key-only:
+
+      * Key resolvable via the standard 3-tier chain (env → alt-env → keychain)
+        → return True.
+      * Otherwise → return False.
+
+    Why no HTTP ping?
+      Hitting ``/v1/models`` on every CLI invocation would burn quota and
+      add cold-call latency (~300ms × 3 providers). Reachability for cloud
+      providers is dominated by "is the key valid", not "is the network up";
+      the actual call later still surfaces 401/429/network errors via the
+      normal surgeon error path. This matches the QQ1 contract for the
+      deepseek leg of the neuro chain.
+
+    ZSF: never raises; returns False on any unexpected error.
+    """
+    try:
+        preset = CARDIOLOGIST_PROVIDER_PRESETS.get(provider_key)
+        if not preset:
+            return False
+        tmp = SurgeonConfig(
+            provider=preset["provider"],
+            endpoint=preset["endpoint"],
+            model=preset["model"],
+            api_key_env=preset["api_key_env"],
+        )
+        return tmp.get_api_key() is not None
+    except (OSError, ValueError):
         return False
     except Exception:  # noqa: BLE001 — ZSF outer guard, never crash discovery
         return False
@@ -665,6 +742,30 @@ class Config:
                 except Exception:  # noqa: BLE001 — ZSF: discover() must never crash
                     pass
 
+        # AAA1 2026-05-12 — mirror the neuro chain for the cardiologist.
+        # CONTEXT_DNA_CARDIO_PROVIDER explicit override wins (parity with
+        # the neuro env var). When absent, walk CARDIOLOGIST_FALLBACK_CHAIN
+        # to silently upgrade degraded nodes. Kill-switch:
+        # CONTEXT_DNA_CARDIO_FALLBACK_DISABLE=1 for tests / strict legacy.
+        cardio_env = os.environ.get("CONTEXT_DNA_CARDIO_PROVIDER")
+        if cardio_env:
+            try:
+                cfg.apply_cardiologist_provider(cardio_env, require_key=False)
+            except ValueError:
+                # Bogus env var — preserve default rather than crash discovery.
+                pass
+            # Explicit override → counter bump; no fallback run.
+            _CARDIO_FALLBACK_COUNTERS["default_kept"] = (
+                _CARDIO_FALLBACK_COUNTERS.get("default_kept", 0) + 1
+            )
+            _persist_counters_zsf()
+        else:
+            if os.environ.get("CONTEXT_DNA_CARDIO_FALLBACK_DISABLE") != "1":
+                try:
+                    cfg.resolve_cardiologist_with_fallback()
+                except Exception:  # noqa: BLE001 — ZSF: discover() must never crash
+                    pass
+
         return cfg
 
     @classmethod
@@ -786,6 +887,61 @@ class Config:
         # Nothing reachable. Record the miss so dashboards see degraded fleet.
         _NEURO_FALLBACK_COUNTERS["no_provider_reachable"] = (
             _NEURO_FALLBACK_COUNTERS.get("no_provider_reachable", 0) + 1
+        )
+        _persist_counters_zsf()
+        return self
+
+    def resolve_cardiologist_with_fallback(
+        self,
+        chain: Optional[List[str]] = None,
+        probe_timeout_s: float = 2.0,
+    ) -> "Config":
+        """Walk the cardiologist fallback chain and apply the first reachable provider.
+
+        AAA1 2026-05-12 — mirrors ``resolve_neurologist_with_fallback`` (QQ1).
+        Fixes the silent single-cloud-surgeon degradation reported by RR5 / WW5
+        / ZZ5: when Anthropic billing is inactive AND cardiologist is hard-pinned
+        to anthropic, ``3s consensus`` produces zero-diversity output (both
+        surgeons fall back to deepseek → sycophancy). With this method wired
+        into ``Config.discover()`` the cardiologist now silently upgrades to
+        the next reachable provider in the chain.
+
+        Caller contract (parity with QQ1):
+          * Only call this when no explicit cardiologist provider override has
+            been supplied (``CONTEXT_DNA_CARDIO_PROVIDER`` env var or
+            ``--cardio-provider`` CLI flag). Explicit overrides MUST win.
+          * Mutates ``self.cardiologist`` to the first reachable preset.
+          * If nothing in the chain is reachable (e.g. no keys configured at
+            all), leaves ``self.cardiologist`` untouched so the rest of the
+            pipeline still emits a friendly "cardiologist unavailable" warning
+            rather than a config crash.
+
+        Increments ZSF observability counters on every choice. Surfaced via
+        ``/health.zsf_counters.three_surgeons.cardio_fallback``.
+        """
+        ladder = chain if chain is not None else CARDIOLOGIST_FALLBACK_CHAIN
+        for provider_key in ladder:
+            if _probe_cardio_provider_reachable(provider_key, timeout_s=probe_timeout_s):
+                try:
+                    # require_key=False — probe already confirmed key resolves;
+                    # a redundant resolve here would just repeat the keychain
+                    # subprocess for no benefit.
+                    self.apply_cardiologist_provider(provider_key, require_key=False)
+                except ValueError:
+                    # Bogus chain entry (unknown provider name) — skip and
+                    # keep walking the chain.
+                    continue
+                except MissingProviderKeyError:
+                    # Race: key disappeared between probe and apply. Skip.
+                    continue
+                _CARDIO_FALLBACK_COUNTERS[provider_key] = (
+                    _CARDIO_FALLBACK_COUNTERS.get(provider_key, 0) + 1
+                )
+                _persist_counters_zsf()
+                return self
+        # Nothing reachable. Record the miss so dashboards see degraded fleet.
+        _CARDIO_FALLBACK_COUNTERS["no_provider_reachable"] = (
+            _CARDIO_FALLBACK_COUNTERS.get("no_provider_reachable", 0) + 1
         )
         _persist_counters_zsf()
         return self
