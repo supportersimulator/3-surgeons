@@ -1158,6 +1158,58 @@ def consult(ctx: click.Context, topic: str, files: tuple, dry_run: bool) -> None
 # -- consensus --------------------------------------------------------------
 
 
+def _consensus_result_to_json(result, *, claim: str) -> dict:
+    """Serialize a ConsensusResult into the ZZ3 --json schema.
+
+    Pure, defensive, never raises. Missing or malformed fields fall back to
+    safe defaults so the JSON envelope is always well-formed.
+    """
+    def _f(name: str, default: float = 0.0) -> float:
+        try:
+            return float(getattr(result, name, default) or 0.0)
+        except Exception:  # noqa: BLE001 — ZSF
+            return default
+
+    def _s(name: str, default: str = "") -> str:
+        try:
+            v = getattr(result, name, default)
+            return "" if v is None else str(v)
+        except Exception:  # noqa: BLE001 — ZSF
+            return default
+
+    def _b(name: str, default: bool = False) -> bool:
+        try:
+            return bool(getattr(result, name, default))
+        except Exception:  # noqa: BLE001 — ZSF
+            return default
+
+    return {
+        "claim": claim,
+        "cardio": {
+            "verdict": _s("cardiologist_assessment", "unavailable"),
+            "confidence": _f("cardiologist_confidence"),
+        },
+        "neuro": {
+            "verdict": _s("neurologist_assessment", "unavailable"),
+            "confidence": _f("neurologist_confidence"),
+        },
+        "weighted_score": _f("weighted_score"),
+        "effective_score": _f("effective_score"),
+        "sycophantic": _b("sycophantic"),
+        "counter_probe_active": _b("counter_probe_active"),
+        "counter_probe_negation": _s("counter_probe_negation"),
+        "counter_probe_negation_score": _f("counter_probe_negation_score"),
+        "counter_probe_cost": _f("counter_probe_cost"),
+        "counter_probe_reason": _s("counter_probe_reason"),
+        "counter_probe_genuine": _b("counter_probe_genuine"),
+        "counter_probe_single_flip": _b("counter_probe_single_flip"),
+        "counter_probe_no_signal": _b("counter_probe_no_signal"),
+        "diversity_yellow": _b("diversity_yellow"),
+        "diversity_reasons": list(getattr(result, "diversity_reasons", []) or []),
+        "cost_usd": _f("total_cost"),
+    }
+
+
 @cli.command()
 @click.argument("claim")
 @click.option("--dry-run", is_flag=True, help="Show what would happen without executing")
@@ -1170,8 +1222,25 @@ def consult(ctx: click.Context, topic: str, files: tuple, dry_run: bool) -> None
         "Costs ~2x normal consensus. Env: CONTEXT_DNA_CONSENSUS_COUNTER_PROBE=on."
     ),
 )
+@click.option(
+    "--json",
+    "json_out",
+    is_flag=True,
+    help=(
+        "Emit a structured JSON object on stdout instead of the prose output. "
+        "Machine-friendly schema (ZZ3 / WW5): claim, cardio/neuro verdicts, "
+        "weighted_score, effective_score, sycophantic, counter_probe_*, "
+        "diversity_*, cost_usd. Stdout stays JSON-only; warnings still go to stderr."
+    ),
+)
 @click.pass_context
-def consensus(ctx: click.Context, claim: str, dry_run: bool, counter_probe: bool) -> None:
+def consensus(
+    ctx: click.Context,
+    claim: str,
+    dry_run: bool,
+    counter_probe: bool,
+    json_out: bool,
+) -> None:
     """Confidence-weighted consensus on a claim."""
     if dry_run:
         from three_surgeons.core.dry_run import check_dry_run
@@ -1192,10 +1261,53 @@ def consensus(ctx: click.Context, claim: str, dry_run: bool, counter_probe: bool
     )
 
     counter_probe_active = _cp_enabled(counter_probe)
-    click.echo(f"Consensus on: {claim}\n")
-    if counter_probe_active:
-        click.echo("  Counter-probe gate: ON (will probe negation)")
+    if not json_out:
+        click.echo(f"Consensus on: {claim}\n")
+        if counter_probe_active:
+            click.echo("  Counter-probe gate: ON (will probe negation)")
     result = team.consensus(claim, counter_probe=counter_probe_active)
+
+    # ZZ3 ship 2: --json path emits a single JSON object on stdout and exits.
+    # ZSF: serialization itself is wrapped — malformed values still yield a
+    # well-formed JSON envelope with an "error" key.
+    if json_out:
+        try:
+            payload = _consensus_result_to_json(result, claim=claim)
+        except Exception as exc:  # noqa: BLE001 — ZSF
+            payload = {
+                "claim": claim,
+                "error": f"consensus_result_serialization_failed: {exc!r}",
+                "cardio": {"verdict": "unavailable", "confidence": 0.0},
+                "neuro": {"verdict": "unavailable", "confidence": 0.0},
+                "weighted_score": 0.0,
+                "effective_score": 0.0,
+                "sycophantic": False,
+                "counter_probe_active": counter_probe_active,
+                "diversity_yellow": False,
+                "diversity_reasons": [],
+                "cost_usd": 0.0,
+            }
+        # Stderr still surfaces the diversity-canary warning for humans;
+        # stdout stays JSON-only so machine consumers can json.loads it.
+        if getattr(result, "diversity_yellow", False):
+            for reason in getattr(result, "diversity_reasons", []) or []:
+                click.echo(f"  ⚠️  Diversity canary: {reason}", err=True)
+        try:
+            click.echo(json.dumps(payload, sort_keys=True))
+        except (TypeError, ValueError) as exc:
+            # Final ZSF fallback — emit a minimal error envelope so the
+            # consumer never has to parse prose.
+            click.echo(
+                json.dumps(
+                    {
+                        "claim": claim,
+                        "error": f"json_serialization_failed: {exc!r}",
+                        "counter_probe_active": counter_probe_active,
+                    },
+                    sort_keys=True,
+                )
+            )
+        return
 
     click.echo(f"  Cardiologist: {result.cardiologist_assessment} "
                f"(confidence={result.cardiologist_confidence:.2f})")
