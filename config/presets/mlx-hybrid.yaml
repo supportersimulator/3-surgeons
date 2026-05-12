@@ -1,13 +1,25 @@
 # 3-Surgeons: MLX Hybrid Mode
-# Cardiologist uses OpenAI API, Neurologist uses local MLX server.
-# Required: Context_DNA_OPENAI env var + mlx_lm.server running on port 5044
+# Cardiologist uses DeepSeek API (primary), OpenAI listed as fallback.
+# Neurologist uses local MLX server.
+#
+# ZZ5 (2026-05-12): flipped from openai-primary to deepseek-primary to match
+# Aaron's 2026-04-18 cutover. OpenAI preserved as an additive fallback.
+#
+# Required: Context_DNA_Deepseek (or DEEPSEEK_API_KEY) env var
+#           + mlx_lm.server running on port 5044.
+# Optional: Context_DNA_OPENAI for the secondary fallback.
 surgeons:
   cardiologist:
     role: "External perspective — cross-examination, evidence"
-    provider: openai
-    endpoint: https://api.openai.com/v1
-    model: gpt-4.1-mini
-    api_key_env: Context_DNA_OPENAI
+    provider: deepseek
+    endpoint: https://api.deepseek.com/v1
+    model: deepseek-chat
+    api_key_env: Context_DNA_Deepseek
+    fallbacks:
+      - provider: openai
+        endpoint: https://api.openai.com/v1
+        model: gpt-4.1-mini
+        api_key_env: Context_DNA_OPENAI
   neurologist:
     role: "Local intelligence — pattern recognition, corrigibility"
     provider: mlx

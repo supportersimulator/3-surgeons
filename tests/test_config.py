@@ -287,12 +287,34 @@ def test_preset_local_only_loads():
 
 
 def test_preset_hybrid_loads():
+    """ZZ5 2026-05-12: hybrid preset flipped to deepseek-primary with
+    openai listed as an additive fallback. Aaron 2026-04-18 cutover —
+    DeepSeek primary, OpenAI optional secondary."""
     from three_surgeons.core.config import Config
     preset = Path(__file__).parent.parent / "config" / "presets" / "hybrid.yaml"
     assert preset.exists(), "hybrid.yaml preset missing"
     cfg = Config.from_yaml(preset)
-    assert cfg.cardiologist.provider == "openai"
+    assert cfg.cardiologist.provider == "deepseek"
+    assert cfg.cardiologist.endpoint == "https://api.deepseek.com/v1"
+    assert cfg.cardiologist.model == "deepseek-chat"
+    # OpenAI must remain reachable as a fallback (additive preservation).
+    assert cfg.cardiologist.fallbacks, "openai fallback missing from hybrid preset"
+    fb_providers = {fb.get("provider") for fb in cfg.cardiologist.fallbacks}
+    assert "openai" in fb_providers, f"openai not in fallbacks: {fb_providers}"
     assert cfg.neurologist.provider == "ollama"
+
+
+def test_preset_mlx_hybrid_loads():
+    """ZZ5 2026-05-12: mlx-hybrid preset flipped to deepseek-primary."""
+    from three_surgeons.core.config import Config
+    preset = Path(__file__).parent.parent / "config" / "presets" / "mlx-hybrid.yaml"
+    assert preset.exists(), "mlx-hybrid.yaml preset missing"
+    cfg = Config.from_yaml(preset)
+    assert cfg.cardiologist.provider == "deepseek"
+    assert cfg.cardiologist.model == "deepseek-chat"
+    fb_providers = {fb.get("provider") for fb in cfg.cardiologist.fallbacks}
+    assert "openai" in fb_providers
+    assert cfg.neurologist.provider == "mlx"
 
 
 class TestReviewConfig:

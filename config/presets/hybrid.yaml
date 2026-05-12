@@ -1,14 +1,28 @@
 # 3-Surgeons: Hybrid Mode (Recommended)
-# Cardiologist uses OpenAI API, Neurologist uses any local LLM.
-# Required: Context_DNA_OPENAI env var + local LLM server running (Ollama, MLX, LM Studio, vLLM)
+# Cardiologist uses DeepSeek API (primary), OpenAI listed as fallback.
+# Neurologist uses any local LLM.
+#
+# ZZ5 (2026-05-12): flipped from openai-primary to deepseek-primary to match
+# Aaron's 2026-04-18 cutover ("DeepSeek primary, OpenAI optional secondary").
+# Backward-compat preserved via additive `fallbacks:` block — if DeepSeek key
+# is missing or its API errors, the cardiologist falls back to OpenAI.
+#
+# Required: Context_DNA_Deepseek (or DEEPSEEK_API_KEY) env var
+#           + local LLM server running (Ollama, MLX, LM Studio, vLLM).
+# Optional: Context_DNA_OPENAI for the secondary fallback.
 # Run '3s init' to auto-detect your local backend.
 surgeons:
   cardiologist:
     role: "External perspective — cross-examination, evidence"
-    provider: openai
-    endpoint: https://api.openai.com/v1
-    model: gpt-4.1-mini
-    api_key_env: Context_DNA_OPENAI
+    provider: deepseek
+    endpoint: https://api.deepseek.com/v1
+    model: deepseek-chat
+    api_key_env: Context_DNA_Deepseek
+    fallbacks:
+      - provider: openai
+        endpoint: https://api.openai.com/v1
+        model: gpt-4.1-mini
+        api_key_env: Context_DNA_OPENAI
   neurologist:
     role: "Local intelligence — pattern recognition, corrigibility"
     provider: ollama
