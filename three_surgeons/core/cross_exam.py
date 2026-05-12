@@ -180,6 +180,24 @@ class ConsensusResult:
     # ``reasons=[]`` is the healthy state.
     diversity_yellow: bool = False
     diversity_reasons: List[str] = field(default_factory=list)
+    # Counter-probe demotion gate (SS1) — only populated when
+    # ``counter_probe=True`` is passed into ``SurgeryTeam.consensus()`` (or
+    # the equivalent env var). Healthy default is ``counter_probe_active=False``
+    # and ``effective_score`` mirroring ``weighted_score``. When the gate
+    # fires sycophantic, ``effective_score`` is demoted to 0.0 and the
+    # verdict is ``no-genuine-consensus``.
+    counter_probe_active: bool = False
+    counter_probe_negation: str = ""
+    counter_probe_negation_score: float = 0.0
+    counter_probe_cost: float = 0.0
+    counter_probe_reason: str = ""
+    counter_probe_genuine: bool = False
+    counter_probe_single_flip: bool = False
+    counter_probe_no_signal: bool = False
+    sycophantic: bool = False
+    effective_score: float = 0.0
+    cardiologist_confidence_adjusted: float = 0.0
+    neurologist_confidence_adjusted: float = 0.0
 
 
 # ── Prompt Templates ─────────────────────────────────────────────────
@@ -644,7 +662,12 @@ class SurgeryTeam:
 
     # ── consensus ────────────────────────────────────────────────────
 
-    def consensus(self, claim: str) -> ConsensusResult:
+    def consensus(
+        self,
+        claim: str,
+        counter_probe: bool = False,
+        _is_negation_pass: bool = False,
+    ) -> ConsensusResult:
         """Confidence-weighted vote on a specific claim.
 
         Asks each surgeon to rate confidence (0-1) and assessment
@@ -652,6 +675,18 @@ class SurgeryTeam:
 
         Handles JSON parsing failures gracefully -- a surgeon that returns
         non-JSON gets default confidence 0.0 and assessment "unavailable".
+
+        Counter-probe demotion gate (SS1):
+          When ``counter_probe=True`` (or env
+          ``CONTEXT_DNA_CONSENSUS_COUNTER_PROBE=on``), the engine probes the
+          claim, then re-probes the negation, then post-processes:
+            - both surgeons agreed at conf>=0.7 with BOTH directions → mark
+              ``sycophantic=True`` and demote ``effective_score`` to 0.0
+            - both flipped correctly → genuine consensus, +10% confidence
+            - exactly one flipped → keep verdict, -30% confidence
+            - both abstained on both → no signal
+          ``_is_negation_pass`` is internal — prevents infinite recursion.
+          Default behaviour is unchanged (counter_probe=False).
         """
         result = ConsensusResult(claim=claim)
 
@@ -727,6 +762,40 @@ class SurgeryTeam:
             result.diversity_reasons = list(canary.get("reasons") or [])
         except Exception as exc:  # noqa: BLE001 — ZSF: canary is sidecar only
             logger.debug("Diversity canary skipped: %s", exc)
+
+        # Mirror weighted_score into effective_score by default; the
+        # counter-probe gate may override this below.
+        result.effective_score = result.weighted_score
+        result.cardiologist_confidence_adjusted = result.cardiologist_confidence
+        result.neurologist_confidence_adjusted = result.neurologist_confidence
+
+        # Counter-probe demotion gate (SS1) — opt-in. Skip if this IS the
+        # negation pass (prevents infinite recursion) or if the gate is off.
+        if not _is_negation_pass:
+            try:
+                from three_surgeons.core import counter_probe as _cp
+
+                if _cp.is_enabled(counter_probe):
+                    if _cp.rate_limited(claim):
+                        logger.debug(
+                            "Counter-probe rate-limited for claim: %s", claim[:60]
+                        )
+                    else:
+                        negation = _cp.negate_claim(claim)
+                        if not negation:
+                            logger.warning(
+                                "Counter-probe: negation generation failed; "
+                                "falling back to non-counter-probe consensus"
+                            )
+                        else:
+                            negated_result = self.consensus(
+                                negation, counter_probe=False, _is_negation_pass=True
+                            )
+                            _cp.apply_to_result(
+                                result, negated_result, negation=negation
+                            )
+            except Exception as exc:  # noqa: BLE001 — ZSF: gate is best-effort
+                logger.debug("Counter-probe gate skipped: %s", exc)
 
         return result
 
