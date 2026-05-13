@@ -1,6 +1,26 @@
+<div align="center">
+
+<img src="icon.png" alt="3-Surgeons — three AI surgeons cross-examining your code" width="200" />
+<!-- TODO: swap for docs/assets/3-surgeons-banner.png once a wide banner is ready -->
+
 # 3-Surgeons
 
-**Three AI surgeons. One operating table. Your code doesn't ship until all three agree.**
+**Three independent AI models. Cross-examined consensus. Your code ships when all three agree.**
+
+Three surgeons, one operating table. Built on five Constitutional Physics invariants and a four-phase operating protocol. **Disagreements are signal, not noise** — and the protocol is provider-agnostic across OpenAI, DeepSeek, Anthropic, Ollama, LM Studio, vLLM, and MLX.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Providers](https://img.shields.io/badge/providers-OpenAI%20%7C%20DeepSeek%20%7C%20Ollama%20%7C%20MLX-27aae1.svg)](#provider-compatibility)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-7c3aed.svg)](https://claude.com/claude-code)
+[![Corrigibility](https://img.shields.io/badge/Corrigibility-invariant-success.svg)](#why-it-works-corrigibility)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](#contributing)
+
+[**Quick Start**](#quick-start) · [**Constitutional Physics**](#constitutional-physics) · [**Install**](#install) · [**IDE Compatibility**](#ide-compatibility) · [**Pairs With**](#pairs-with-superpowers-plugin)
+
+</div>
+
+---
 
 > Would you wing a complicated surgery with one surgeon?
 >
@@ -19,6 +39,26 @@ Every AI coding tool has the same flaw: **one model, one perspective, one set of
 | 🔪 | **Head Surgeon** | Synthesizes, decides, implements | Claude (your IDE session) |
 | 🩺 | **Cardiologist** | External perspective, cross-examination | GPT-4.1-mini (OpenAI) |
 | 🧠 | **Neurologist** | Pattern recognition, corrigibility checks | Qwen3-4B (local, private) |
+
+---
+
+## The Vision: Calibrated Correctness at Any Scale
+
+> A single AI reviewer is a single point of failure. Three reviewers, hunting independently, force the truth into the open.
+
+3-Surgeons is built on one belief: **the bottleneck in AI-assisted coding is no longer speed — it's calibration.** A confidently wrong answer ships faster than a careful right one. Three independent surgeons make confidence *earnable* — every claim survives cross-examination or it dies on the table.
+
+| Scale | What it unlocks |
+|-------|-----------------|
+| **1 model** | One opinion. Fast. Possibly wrong, but you wouldn't know. |
+| **2 models** | A check. Often agree. Disagreement = stop and look. |
+| **3 models** | Triangulation. Truth becomes recoverable. The blind spot of any one model is exposed by the other two. |
+| **5+ models** | A specialty board. Each surgeon brings a different training distribution. Convergence under independent attack is *evidence*, not opinion. |
+| **Continuous review** | Every diff cross-examined. Every claim audited. Every blind spot named. Calibration compounds across the codebase. |
+
+The protocol scales linearly with the number of surgeons. The architecture is provider-agnostic. **The only ceiling is your tolerance for groupthink.**
+
+---
 
 ## Constitutional Physics
 
@@ -344,6 +384,10 @@ If none are set and `--cardio-provider=deepseek` requires a live call, the CLI f
 
 3-Surgeons provides the **epistemological layer** (truth calibration through multi-model consensus). The [Superpowers](https://github.com/supportersimulator/superpowers) plugin provides the **process layer** (workflow discipline, TDD, debugging, planning skills). Together they form a complete surgical operating environment — rigorous process AND rigorous truth-testing.
 
+## Pairs With: Multi-Fleet
+
+3-Surgeons is the *quality* dimension. [**Multi-Fleet**](https://github.com/supportersimulator/multi-fleet) is the *scale* dimension. Run 3-Surgeons on a single machine and you get calibrated correctness. Run it across a Multi-Fleet of N machines and every surgeon-trio shares findings via NATS — disagreements surface fleet-wide, consensus compounds across nodes. **Correctness × scale = a coding board of directors that never sleeps.**
+
 ---
 
 ## ContextDNA: The Full Operating Theater
@@ -383,6 +427,26 @@ A disagreement surfaces:
 3. Run tests: `python -m pytest tests/ -v`
 4. Submit a PR
 
+## Status
+
+3-Surgeons is **production-tested at small scale**. It powers the daily review loop on a 4-node ContextDNA fleet (mac1, mac2, mac3, cloud) — every commit, every cross-examination, every consensus claim ships through the protocol. It has survived provider outages, model deprecations, and partial-network partitions without dropping a verdict.
+
+It is **deliberately scoped**: 3-Surgeons does cross-examination, nothing else. Process discipline pairs with [Superpowers](https://github.com/supportersimulator/superpowers); fleet scale pairs with [Multi-Fleet](https://github.com/supportersimulator/multi-fleet); orchestration pairs with whatever IDE you live in.
+
+We invite you to test it at your scale.
+
+---
+
 ## License
 
-MIT — see [LICENSE](LICENSE)
+MIT — do anything you want, just keep the copyright notice. See [LICENSE](LICENSE).
+
+---
+
+<div align="center">
+
+**Built for engineers who don't ship code reviewed by a single model.**
+
+⭐ Star this repo if you've ever shipped a bug all three would have caught.
+
+</div>
