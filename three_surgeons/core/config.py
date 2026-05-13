@@ -167,16 +167,13 @@ OPENAI_TO_DEEPSEEK_MODEL: Dict[str, str] = {
 
 # Auto-fallback chain order for the cardiologist (AAA1 2026-05-12).
 # Mirrors NEUROLOGIST_FALLBACK_CHAIN (QQ1 2026-05-08).
-# Order rationale:
-#   1. openai     — historical default; preserves legacy behavior on healthy
-#                   nodes (key present + endpoint reachable).
-#   2. anthropic  — diversity tier (SS2 preset). Picked when OpenAI billing
-#                   fails (RR5 root cause) but Anthropic key still works.
-#   3. deepseek   — cheap, reliable cloud fallback. Used when neither OpenAI
-#                   nor Anthropic respond — preserves single-cloud-surgeon
-#                   consensus rather than collapsing to single-surgeon.
+# Order rationale (LLL1 2026-05-12: flipped to deepseek-first per CLAUDE.md
+# 2026-04-26 steady-state directive; OpenAI billing_not_active since RR5):
+#   1. deepseek   — steady-state per CLAUDE.md 2026-04-26; cheap + reliable.
+#   2. anthropic  — diversity tier (SS2 preset). Used when DeepSeek key absent.
+#   3. openai     — legacy fallback for OSS nodes with only an OpenAI key.
 # Walked only when no explicit env-var/CLI/YAML override is in effect.
-CARDIOLOGIST_FALLBACK_CHAIN: List[str] = ["openai", "anthropic", "deepseek"]
+CARDIOLOGIST_FALLBACK_CHAIN: List[str] = ["deepseek", "anthropic", "openai"]
 
 
 # ── Neurologist provider presets ─────────────────────────────────────
