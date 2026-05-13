@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -1336,6 +1337,18 @@ class SurgeryTeam:
                 }
             except (json.JSONDecodeError, TypeError, ValueError):
                 pass
+
+        # Regex fallback: handle Qwen3/prose responses that embed the values
+        # without valid JSON structure (e.g. "confidence: 0.8, assessment: agree")
+        confidence_match = re.search(r'"?confidence"?\s*:\s*([\d.]+)', text)
+        assessment_match = re.search(
+            r'"?assessment"?\s*:\s*"?(agree|disagree|uncertain)"?', text
+        )
+        if confidence_match and assessment_match:
+            return {
+                "confidence": float(confidence_match.group(1)),
+                "assessment": assessment_match.group(1),
+            }
 
         _PARSE_FAILURES["bad_json"] += 1
         logger.warning(
