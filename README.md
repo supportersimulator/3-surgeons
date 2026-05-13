@@ -20,6 +20,18 @@ Every AI coding tool has the same flaw: **one model, one perspective, one set of
 | 🩺 | **Cardiologist** | External perspective, cross-examination | GPT-4.1-mini (OpenAI) |
 | 🧠 | **Neurologist** | Pattern recognition, corrigibility checks | Qwen3-4B (local, private) |
 
+## Constitutional Physics
+
+Five principles that govern every surgical operation. These are invariants — no tool call, no config flag, no shortcut overrides them.
+
+| # | Principle | What it means |
+|---|-----------|----------------|
+| 1 | **Preserve Determinism** | Same inputs must produce the same output. Non-deterministic paths trigger safe mode and are flagged before shipping. |
+| 2 | **No Discovery at Injection** | Retrieval only during context injection — no new reasoning, no live inference. Prevents hallucinations from contaminating shared state. |
+| 3 | **Respect SOP Integrity** | Standard Operating Procedures change only when backed by reproducible evidence from at least two surgeons. Opinion alone is not enough. |
+| 4 | **Evidence Over Confidence** | Outcomes are the ground truth. A confident answer that contradicts observed behavior is wrong. |
+| 5 | **Prefer Reversible Actions** | Checkpoint before risk. Every destructive or irreversible action requires explicit surgeon consensus and a rollback path. |
+
 ## Why It Works: Corrigibility
 
 Most AI tools optimize for **confidence**. 3-Surgeons optimizes for **correctness**.
@@ -350,6 +362,19 @@ provider = LLMProvider(config, query_adapter=priority_queue_adapter)
 ```
 
 See [docs/CONTEXTDNA-IDE-UPGRADE.md](docs/CONTEXTDNA-IDE-UPGRADE.md) for the full migration guide.
+
+## Why Disagreements = Value
+
+When all three surgeons agree immediately, that is a weak signal — it may mean groupthink, not correctness. When they disagree, that is the system working.
+
+A disagreement surfaces:
+- An assumption one model holds that the others don't
+- A risk one model has been trained to weight differently
+- A blind spot in the majority view
+
+3-Surgeons never suppresses disagreements. Confidence scores in the final consensus output show exactly where the surgeons diverged and why. The human (or orchestrating agent) decides what to do with that signal — but they decide with full information.
+
+**The goal is not fast consensus. The goal is calibrated confidence.**
 
 ## Contributing
 
