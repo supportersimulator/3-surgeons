@@ -196,6 +196,11 @@ class GPULock:
 
         Returns True if a stale lock was removed (caller should retry _try_lock).
         Parses JSON metadata or falls back to plain PID for backward compat.
+
+        A4 2026-05-14: also reclaims self-orphaned locks (lock file claims our
+        own PID but no live thread holds the intra-process threading.Lock and
+        the file is older than _SELF_ORPHAN_GRACE_S). Caused by worker threads
+        dying before their `finally: release()` ran.
         """
         try:
             content = self._lock_path.read_text().strip()
@@ -211,6 +216,26 @@ class GPULock:
             if not _is_pid_alive(pid):
                 self._lock_path.unlink(missing_ok=True)
                 return True
+            # Self-orphan check: lock claims our PID but the thread that
+            # acquired it is gone. Detect by testing whether the per-dir
+            # threading.Lock is acquirable non-blocking; if yes, no live
+            # thread is holding the in-process side of the GPULock pair,
+            # so the file lock is orphaned. Grace period guards races.
+            if pid == os.getpid():
+                age = _self_orphan_lock_age_s(self._lock_path)
+                if age is not None and age >= _SELF_ORPHAN_GRACE_S:
+                    # We're already holding self._thread_lock at this point
+                    # (acquire() acquired it before calling _steal_stale).
+                    # That alone proves no OTHER thread in this process
+                    # holds the lock — a dead thread holding it would have
+                    # blocked our acquire above. So this self-orphan is
+                    # safe to reclaim.
+                    try:
+                        self._lock_path.unlink(missing_ok=True)
+                        _GPU_ADAPTER_METRICS["self_orphaned_lock_reclaimed"] += 1
+                        return True
+                    except OSError:
+                        _GPU_ADAPTER_METRICS["stale_lock_reclaim_errors"] += 1
         except (OSError, ValueError):
             try:
                 self._lock_path.unlink(missing_ok=True)
@@ -449,7 +474,43 @@ DEFAULT_LOCK_DIR = Path("/tmp/3surgeons")
 _GPU_ADAPTER_METRICS: Dict[str, int] = {
     "empty_content": 0,            # _extract_content returned ""
     "reasoning_only_responses": 0, # response had reasoning but no content key
+    "self_orphaned_lock_reclaimed": 0,  # A4 2026-05-14: stale lock by our own PID, no FD
+    "stale_lock_reclaim_errors": 0,     # A4 2026-05-14: self-stale check failed (ZSF)
 }
+
+
+# ── Self-orphaned lock reclaim (A4 2026-05-14) ────────────────────────
+#
+# Root cause: a worker thread that called GPULock.acquire() can die before
+# running its `finally: lock.release()` (e.g. asyncio task cancellation that
+# kills the wrapping thread before its finally clause executes, or a fatal
+# signal handled out-of-band). The lock file is left on disk with our own
+# PID. _steal_stale only reclaims locks held by DEAD PIDs, so a long-lived
+# daemon (fleet_nerve_nats) accumulates self-orphaned locks indefinitely.
+#
+# Fix: if the lock file claims our own PID, the lock has been on disk for
+# longer than _SELF_ORPHAN_GRACE_S, AND no live thread currently holds the
+# GPULock's intra-process threading.Lock for that lock_dir, the lock is a
+# self-orphan and can be safely reclaimed.
+#
+# Grace period guards against the race where one thread just created the
+# file in _try_lock and the cleaner thread sees it. 30s is plenty since a
+# normal LLM call returns in <30s; if it's older than 30s and the thread
+# lock isn't held, the original worker is gone.
+
+_SELF_ORPHAN_GRACE_S = 30.0
+
+
+def _self_orphan_lock_age_s(lock_path: Path) -> Optional[float]:
+    """Return how long *lock_path* has existed on disk, in seconds.
+
+    Returns None if the file is missing or stat fails.
+    """
+    try:
+        st = lock_path.stat()
+    except OSError:
+        return None
+    return max(0.0, time.time() - st.st_mtime)
 
 
 def gpu_adapter_metrics() -> Dict[str, int]:
