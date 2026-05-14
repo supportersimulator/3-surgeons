@@ -5,9 +5,9 @@
 
 # 3-Surgeons
 
-**Three independent AI models. Cross-examined consensus. Your code ships when all three agree.**
+**Three-model code review consensus — disagreement is the value, not consensus.**
 
-Three surgeons, one operating table. Built on five Constitutional Physics invariants and a four-phase operating protocol. **Disagreements are signal, not noise** — and the protocol is provider-agnostic across OpenAI, DeepSeek, Anthropic, Ollama, LM Studio, vLLM, and MLX.
+Three independent AI models cross-examine your code. They challenge each other's blind spots, hunt for what the others missed, and surface every disagreement instead of burying it. Built on five Constitutional Physics invariants and a four-phase operating protocol. Provider-agnostic across OpenAI, DeepSeek, Anthropic, Ollama, LM Studio, vLLM, and MLX.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -36,9 +36,9 @@ Every AI coding tool has the same flaw: **one model, one perspective, one set of
 
 | | Surgeon | Role | Default Model |
 |---|---------|------|---------------|
-| 🔪 | **Head Surgeon** | Synthesizes, decides, implements | Claude (your IDE session) |
-| 🩺 | **Cardiologist** | External perspective, cross-examination | GPT-4.1-mini (OpenAI) |
-| 🧠 | **Neurologist** | Pattern recognition, corrigibility checks | Qwen3-4B (local, private) |
+| 🔪 | **Atlas (Head Surgeon / Judge)** | Synthesizes findings, weighs evidence, decides, implements — never overrides without grounds | Claude (your IDE session) |
+| 🩺 | **Cardiologist (External Skeptic)** | External-model perspective from a different training distribution. Surfaces what Atlas can't see | DeepSeek-chat (drop-in OpenAI also supported) |
+| 🧠 | **Neurologist (Local Devil's Advocate)** | Runs locally for privacy and corrigibility. Forces counter-position before consensus locks in | DeepSeek-chat via local proxy (Qwen3-4B legacy) |
 
 ---
 
@@ -406,6 +406,49 @@ provider = LLMProvider(config, query_adapter=priority_queue_adapter)
 ```
 
 See [docs/CONTEXTDNA-IDE-UPGRADE.md](docs/CONTEXTDNA-IDE-UPGRADE.md) for the full migration guide.
+
+## Five Invariance Skills
+
+These are the load-bearing protocols. Each is a hard-gate — no surgeon can bypass them, no shortcut overrides them.
+
+| Skill | When to invoke | What it protects against |
+|-------|----------------|--------------------------|
+| **architectural-gate** | Before any architecture decision | Locking in a design before the other two surgeons have argued the opposite |
+| **counter-position** | Before any opinion is concluded | Confirmation bias — forces a steelman of the opposing view before signing off |
+| **pre-implementation-review** | After plan, before code | Building the wrong thing perfectly. Catches scope drift and missed requirements |
+| **post-implementation-verification** | After code, before merge | "Looks done" claims that don't survive contact with reality. Demands evidence, not confidence |
+| **invariance-health** | Continuously | Surgeon drift, stale API keys, model deprecations, silent provider degradation |
+
+The skills compose. A high-risk change runs all five. A docs typo runs none. Risk tier (Light / Standard / Full) determines which fire automatically.
+
+## Showcase: A Real Disagreement
+
+A recent change proposed flipping the Cardiologist default from OpenAI to DeepSeek. Atlas (Claude) called it a clean swap — same wire protocol, lower cost. Cross-examination surfaced what the head surgeon missed:
+
+```
+Atlas (Head Surgeon):
+  "Drop-in. DeepSeek implements /v1/chat/completions. Ship it."
+  Confidence: 0.92
+
+Cardiologist (External Skeptic):
+  "Wire-compatible, yes. But o1-style reasoning models translate differently.
+   Add an auto-translation table (gpt-4.1-mini -> deepseek-chat,
+   o1-mini -> deepseek-reasoner) or downstream callers silently get the
+   wrong model."
+  Confidence: 0.78 — DISAGREES
+
+Neurologist (Local Devil's Advocate):
+  "API key resolution will silently fall through to the wrong env var.
+   Add fallback chain: Context_DNA_Deepseek -> DEEPSEEK_API_KEY ->
+   macOS Keychain -> fail-fast with an actionable message."
+  Confidence: 0.81 — DISAGREES
+
+Atlas (synthesis):
+  "Both objections valid. Adding model translation table + keychain fallback
+   before merging. New confidence: 0.96."
+```
+
+The shipped commit (`93b01c8`) includes both safeguards. Without the two dissenting surgeons, the rollout would have produced silent 401s and wrong-model responses. **Disagreement was the value, not the consensus.**
 
 ## Why Disagreements = Value
 
