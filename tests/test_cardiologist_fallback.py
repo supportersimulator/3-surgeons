@@ -67,31 +67,33 @@ def _isolate_counters():
 
 
 class TestHealthyNodePreservesDefault:
-    def test_openai_up_wins_first(self, tmp_path):
-        # Everything reachable — openai wins because it's first in chain.
-        # Preserves the legacy default behavior.
+    def test_deepseek_up_wins_first(self, tmp_path):
+        # WaveR 2026-05-12: chain flipped to [deepseek, anthropic, openai] —
+        # deepseek wins when all healthy. Preserves new free-CC default.
         probe = _make_probe_stub({k: True for k in CARDIOLOGIST_FALLBACK_CHAIN})
         with patch.object(config_mod, "_probe_cardio_provider_reachable", probe):
             cfg = Config.discover(project_dir=tmp_path)
-        assert cfg.cardiologist.provider == "openai"
-        assert cfg.cardiologist.endpoint == "https://api.openai.com/v1"
-        assert cfg.cardiologist.model == "gpt-4.1-mini"
+        assert cfg.cardiologist.provider == "deepseek"
+        assert cfg.cardiologist.endpoint == "https://api.deepseek.com/v1"
+        assert cfg.cardiologist.model == "deepseek-chat"
         counters = get_cardio_fallback_counters()
-        assert counters["openai"] == 1
+        assert counters["deepseek"] == 1
         # No other branch fired.
-        for k in ("anthropic", "deepseek", "no_provider_reachable"):
+        for k in ("anthropic", "openai", "no_provider_reachable"):
             assert counters[k] == 0
 
 
-# --- 2. openai key missing, anthropic up ----------------------------------
+# --- 2. deepseek down, anthropic up ---------------------------------------
 
 
-class TestOpenAIDownAnthropicUp:
+class TestDeepSeekDownAnthropicUp:
     def test_falls_back_to_anthropic(self, tmp_path):
+        # Chain [deepseek, anthropic, openai] — deepseek down skips to
+        # anthropic (chain index 1). Updated for WaveR 2026-05-12 flip.
         probe = _make_probe_stub({
-            "openai": False,
+            "deepseek": False,
             "anthropic": True,
-            "deepseek": True,
+            "openai": True,
         })
         with patch.object(config_mod, "_probe_cardio_provider_reachable", probe):
             cfg = Config.discover(project_dir=tmp_path)
@@ -99,7 +101,7 @@ class TestOpenAIDownAnthropicUp:
         assert cfg.cardiologist.endpoint == "https://api.anthropic.com/v1"
         counters = get_cardio_fallback_counters()
         assert counters["anthropic"] == 1
-        assert counters["openai"] == 0
+        assert counters["deepseek"] == 0
 
 
 # --- 3. openai + anthropic down, deepseek up ------------------------------
