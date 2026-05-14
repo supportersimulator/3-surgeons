@@ -463,10 +463,31 @@ def _reset_gpu_adapter_metrics() -> None:
         _GPU_ADAPTER_METRICS[k] = 0
 
 
+_DEFAULT_GPU_LOCK_TIMEOUT_S = 300.0  # was 90.0 — see I7/2026-05-14 root-cause notes
+
+
+def _gpu_lock_timeout_from_env(default: float = _DEFAULT_GPU_LOCK_TIMEOUT_S) -> float:
+    """Read GPU_LOCK_TIMEOUT_S env var, fallback to *default* on parse error.
+
+    Bogus / empty / non-positive values fall through to the default so a
+    misconfigured shell can't shrink the timeout to zero (ZSF).
+    """
+    raw = os.environ.get("GPU_LOCK_TIMEOUT_S", "")
+    if not raw:
+        return float(default)
+    try:
+        v = float(raw)
+        if v <= 0:
+            return float(default)
+        return v
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def make_gpu_locked_adapter(
     config: "SurgeonConfig",
     lock_dir: Optional[Path] = None,
-    lock_timeout: float = 90.0,
+    lock_timeout: Optional[float] = None,
 ) -> "Callable":
     """Create a QueryAdapter-compatible callable that wraps HTTP calls with a GPU lock.
 
@@ -481,6 +502,11 @@ def make_gpu_locked_adapter(
 
     Only useful for local providers (mlx, ollama, vllm, lmstudio).  For remote
     providers the lock is unnecessary — pass ``query_adapter=None`` instead.
+
+    *lock_timeout* defaults to ``GPU_LOCK_TIMEOUT_S`` env var (300s = 5 minutes).
+    Root-cause fix (I7, 2026-05-14): 90s was too aggressive for sequential
+    brainstorms — cold-start can hit 60s, plus queue wait extends it. Five
+    minutes covers cold-start + 4-deep queue wait without false timeouts.
     """
     import httpx as _httpx  # deferred so import cost is only paid when used
 
@@ -491,6 +517,8 @@ def make_gpu_locked_adapter(
     _endpoint = config.endpoint.rstrip("/")
     _model = config.model
     _api_key = config.get_api_key()
+    if lock_timeout is None:
+        lock_timeout = _gpu_lock_timeout_from_env()
 
     def _adapter(
         system: str,
