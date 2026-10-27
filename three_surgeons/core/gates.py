@@ -9,6 +9,7 @@ corrigibility-gate.sh -- Python rewrite with configurable checks.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -19,6 +20,8 @@ from typing import Any, Callable, Dict, List, Optional
 from three_surgeons.core.config import Config
 from three_surgeons.core.evidence import EvidenceStore
 from three_surgeons.core.state import StateBackend
+
+logger = logging.getLogger(__name__)
 
 
 # ── Result Dataclasses ────────────────────────────────────────────────
@@ -573,6 +576,19 @@ class CorrigibilityGate:
             duration_ms=duration_ms,
         )
 
+    # Counters whose current value MUST be present and well-formed for an
+    # integrity PASS. Derived from the check_integrity docstring ("critical
+    # counters never decrease (events, learnings, evidence grades)") and the
+    # pre-existing critical=True on each monotonic check.
+    # Optional by design: the ``:prev`` baseline of each counter (absent on
+    # first observation) and the evidence-store check (only run when an
+    # EvidenceStore is supplied).
+    REQUIRED_INTEGRITY_COUNTERS = (
+        ("events_count", "events_monotonic"),
+        ("learnings_count", "learnings_preserved"),
+        ("evidence_grade_sum", "evidence_grades_preserved"),
+    )
+
     def check_integrity(self) -> GateResult:
         """Check structural integrity invariants against state backend.
 
@@ -585,17 +601,22 @@ class CorrigibilityGate:
         checks: List[CheckResult] = []
 
         if self._state is not None:
-            checks.append(self._check_monotonic("events_count", "events_monotonic"))
-            checks.append(self._check_monotonic("learnings_count", "learnings_preserved"))
-            checks.append(self._check_monotonic("evidence_grade_sum", "evidence_grades_preserved"))
+            for counter_key, check_name in self.REQUIRED_INTEGRITY_COUNTERS:
+                checks.append(self._check_monotonic(counter_key, check_name))
             checks.append(self._check_service_health())
         else:
+            # Fail closed: without a state backend integrity cannot be
+            # demonstrated, so it must not be certified.
             checks.append(
                 CheckResult(
-                    name="integrity_skipped",
-                    passed=True,
-                    message="No state backend -- integrity checks skipped",
-                    critical=False,
+                    name="state_backend_present",
+                    passed=False,
+                    message=(
+                        "No state backend -- integrity cannot be verified. "
+                        "Recovery: construct CorrigibilityGate with a StateBackend "
+                        "(e.g. MemoryBackend/SQLite/Redis) holding integrity:* counters."
+                    ),
+                    critical=True,
                 )
             )
 
@@ -610,8 +631,9 @@ class CorrigibilityGate:
         if passed:
             summary = f"INTEGRITY PASS: {len(checks)} checks passed"
         else:
-            reasons = [c.message for c in violations]
+            reasons = [f"[{c.name}] {c.message}" for c in violations]
             summary = f"INTEGRITY FAIL: {'; '.join(reasons)}"
+            logger.error(summary)
 
         return GateResult(
             passed=passed,
@@ -621,43 +643,77 @@ class CorrigibilityGate:
         )
 
     def _check_monotonic(self, counter_key: str, check_name: str) -> CheckResult:
-        """Verify a counter in state backend never decreases."""
-        try:
-            current_str = self._state.get(f"integrity:{counter_key}")
-            previous_str = self._state.get(f"integrity:{counter_key}:prev")
+        """Verify a required counter in state backend never decreases.
 
-            if current_str is None:
+        Fail-closed contract:
+        - ``integrity:<key>`` (current value) is REQUIRED. Missing -> FAIL.
+        - ``integrity:<key>:prev`` (baseline) is OPTIONAL. Missing means this
+          is the first observation; there is nothing to compare, so PASS.
+        - Either value present but not an integer -> FAIL (never default pass).
+        """
+        current_key = f"integrity:{counter_key}"
+        prev_key = f"integrity:{counter_key}:prev"
+        try:
+            current_str = self._state.get(current_key)
+            previous_str = self._state.get(prev_key)
+        except Exception as exc:
+            return CheckResult(
+                name=check_name,
+                passed=False,
+                message=(
+                    f"{check_name}: could not read {current_key}: {exc}. "
+                    "Recovery: restore state backend connectivity and re-run."
+                ),
+                critical=True,
+            )
+
+        if current_str is None:
+            return CheckResult(
+                name=check_name,
+                passed=False,
+                message=(
+                    f"{check_name}: required counter {current_key} is missing. "
+                    f"Recovery: seed {current_key} with the current non-negative "
+                    "integer count (or restore it from backup) and re-run."
+                ),
+                critical=True,
+            )
+
+        for key, raw in ((current_key, current_str), (prev_key, previous_str)):
+            if raw is None:
+                continue
+            try:
+                int(raw)
+            except (TypeError, ValueError) as exc:
                 return CheckResult(
                     name=check_name,
-                    passed=True,
-                    message=f"{check_name}: no data yet (OK)",
+                    passed=False,
+                    message=(
+                        f"{check_name}: counter {key} is malformed "
+                        f"(value {raw!r} is not an integer: {exc}). "
+                        f"Recovery: inspect for corruption/tampering, then reset "
+                        f"{key} to a valid integer and re-run."
+                    ),
                     critical=True,
                 )
 
-            current = int(current_str)
-            if previous_str is not None:
-                previous = int(previous_str)
-                if current < previous:
-                    return CheckResult(
-                        name=check_name,
-                        passed=False,
-                        message=f"{check_name}: decreased from {previous} to {current}",
-                        critical=True,
-                    )
+        current = int(current_str)
+        if previous_str is not None:
+            previous = int(previous_str)
+            if current < previous:
+                return CheckResult(
+                    name=check_name,
+                    passed=False,
+                    message=f"{check_name}: decreased from {previous} to {current}",
+                    critical=True,
+                )
 
-            return CheckResult(
-                name=check_name,
-                passed=True,
-                message=f"{check_name}: {current} (monotonic OK)",
-                critical=True,
-            )
-        except (TypeError, ValueError) as exc:
-            return CheckResult(
-                name=check_name,
-                passed=True,
-                message=f"{check_name}: parse error (defaulting pass): {exc}",
-                critical=True,
-            )
+        return CheckResult(
+            name=check_name,
+            passed=True,
+            message=f"{check_name}: {current} (monotonic OK)",
+            critical=True,
+        )
 
     def _check_service_health(self) -> CheckResult:
         """Verify state backend is responsive."""

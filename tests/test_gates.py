@@ -291,19 +291,23 @@ class TestCorrigibilityGate:
 
 
 class TestCorrigibilityGateIntegrity:
-    def test_integrity_passes_with_no_data(self, tmp_path):
-        """Integrity check passes when no counters exist yet."""
+    def test_integrity_fails_with_no_data(self, tmp_path):
+        """No required counters exist -> integrity not demonstrated -> FAIL.
+
+        (Previously asserted PASS; that encoded the fail-open behavior.)
+        """
         config = Config()
         state = MemoryBackend()
         evidence = EvidenceStore(str(tmp_path / "ev.db"))
         gate = CorrigibilityGate(config=config, state=state, evidence=evidence)
         result = gate.check_integrity()
-        assert result.passed is True
+        assert result.passed is False
 
     def test_integrity_passes_monotonic(self, tmp_path):
         """Counters that increase pass monotonic checks."""
         config = Config()
         state = MemoryBackend()
+        _seed_healthy(state)
         state.set("integrity:events_count", "10")
         state.set("integrity:events_count:prev", "5")
         evidence = EvidenceStore(str(tmp_path / "ev.db"))
@@ -323,13 +327,16 @@ class TestCorrigibilityGateIntegrity:
         assert result.passed is False
         assert any("decreased" in c.message for c in result.checks if not c.passed)
 
-    def test_integrity_no_state_skips(self):
-        """Without state backend, integrity checks are skipped."""
+    def test_integrity_no_state_fails_closed(self):
+        """Without state backend, integrity cannot be verified -> FAIL.
+
+        (Previously asserted a 'skipped' PASS; that was the fail-open path.)
+        """
         config = Config()
         gate = CorrigibilityGate(config=config)
         result = gate.check_integrity()
-        assert result.passed is True
-        assert any("skipped" in c.message.lower() for c in result.checks)
+        assert result.passed is False
+        assert any("cannot be verified" in c.message for c in result.checks)
 
     def test_integrity_service_health(self, tmp_path):
         """Service health check passes with operational state backend."""
