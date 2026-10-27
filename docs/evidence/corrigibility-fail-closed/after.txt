@@ -1,0 +1,19 @@
+# commit: 7cc9a1a227378ba52f3085e23841e7756b8bcfd6 (fix applied)
+# cmd: python -m pytest tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed -v -p no:cacheprovider
+============================= test session starts ==============================
+platform linux -- Python 3.13.5, pytest-9.1.1, pluggy-1.7.0 -- /workspace/3s-failopen-fix/.venv/bin/python
+rootdir: /workspace/3s-failopen-fix
+configfile: pyproject.toml
+plugins: timeout-2.4.0, asyncio-1.4.1, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_absent_state_backend_fails_closed PASSED [ 14%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_missing_required_counter_fails_closed PASSED [ 28%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_malformed_counter_fails_closed PASSED [ 42%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_malformed_prev_counter_fails_closed PASSED [ 57%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_failure_is_logged_loudly PASSED [ 71%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_healthy_integrity_still_passes PASSED [ 85%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_optional_prev_baseline_absent_still_passes PASSED [100%]
+
+============================== 7 passed in 0.09s ===============================
