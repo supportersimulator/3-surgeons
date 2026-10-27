@@ -362,6 +362,103 @@ class TestCorrigibilityGateIntegrity:
         assert result.duration_ms >= 0
 
 
+# ── CorrigibilityGate integrity: fail-closed regression tests ───────
+#
+# An integrity verdict of PASS must only be produced when integrity was
+# actually demonstrated. Each negative test below targets one fail-open path
+# in the original implementation (absent backend, missing required counter,
+# malformed counter).
+
+_REQUIRED_COUNTERS = ("events_count", "learnings_count", "evidence_grade_sum")
+
+
+def _seed_healthy(state, current="10", prev="5"):
+    for key in _REQUIRED_COUNTERS:
+        state.set(f"integrity:{key}", current)
+        if prev is not None:
+            state.set(f"integrity:{key}:prev", prev)
+
+
+class TestCorrigibilityGateIntegrityFailClosed:
+    def test_absent_state_backend_fails_closed(self):
+        """No state backend -> integrity cannot be demonstrated -> FAIL."""
+        gate = CorrigibilityGate(config=Config())
+        result = gate.check_integrity()
+        assert result.passed is False
+        failed = [c for c in result.checks if not c.passed]
+        assert any(c.name == "state_backend_present" and c.critical for c in failed)
+        assert "Recovery:" in result.summary
+
+    def test_missing_required_counter_fails_closed(self, tmp_path):
+        """A required counter absent from state -> FAIL naming that counter."""
+        state = MemoryBackend()
+        _seed_healthy(state)
+        state.delete("integrity:learnings_count")
+        state.delete("integrity:learnings_count:prev")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=Config(), state=state, evidence=evidence)
+        result = gate.check_integrity()
+        assert result.passed is False
+        failed = [c for c in result.checks if not c.passed]
+        assert [c.name for c in failed] == ["learnings_preserved"]
+        assert "integrity:learnings_count" in failed[0].message
+        assert "Recovery:" in failed[0].message
+
+    def test_malformed_counter_fails_closed(self, tmp_path):
+        """A non-integer counter value -> FAIL, never 'defaulting pass'."""
+        state = MemoryBackend()
+        _seed_healthy(state)
+        state.set("integrity:events_count", "not-a-number")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=Config(), state=state, evidence=evidence)
+        result = gate.check_integrity()
+        assert result.passed is False
+        failed = [c for c in result.checks if not c.passed]
+        assert [c.name for c in failed] == ["events_monotonic"]
+        assert "malformed" in failed[0].message
+        assert "Recovery:" in failed[0].message
+
+    def test_malformed_prev_counter_fails_closed(self, tmp_path):
+        """A malformed :prev baseline is also unverifiable -> FAIL."""
+        state = MemoryBackend()
+        _seed_healthy(state)
+        state.set("integrity:evidence_grade_sum:prev", "1.5x")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=Config(), state=state, evidence=evidence)
+        result = gate.check_integrity()
+        assert result.passed is False
+        failed = [c for c in result.checks if not c.passed]
+        assert [c.name for c in failed] == ["evidence_grades_preserved"]
+
+    def test_failure_is_logged_loudly(self, tmp_path, caplog):
+        """A failed integrity verdict is emitted at ERROR level (fail out loud)."""
+        import logging
+
+        gate = CorrigibilityGate(config=Config())
+        with caplog.at_level(logging.ERROR, logger="three_surgeons.core.gates"):
+            result = gate.check_integrity()
+        assert result.passed is False
+        assert any("INTEGRITY FAIL" in r.getMessage() for r in caplog.records)
+
+    def test_healthy_integrity_still_passes(self, tmp_path):
+        """Positive control: all required counters present, increasing, services up."""
+        state = MemoryBackend()
+        _seed_healthy(state)
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=Config(), state=state, evidence=evidence)
+        result = gate.check_integrity()
+        assert result.passed is True, result.summary
+        assert all(c.passed for c in result.checks)
+
+    def test_optional_prev_baseline_absent_still_passes(self, tmp_path):
+        """First observation (no :prev baseline) is legitimate, not a failure."""
+        state = MemoryBackend()
+        _seed_healthy(state, prev=None)
+        gate = CorrigibilityGate(config=Config(), state=state)
+        result = gate.check_integrity()
+        assert result.passed is True, result.summary
+
+
 # ── GainsGate expanded checks ────────────────────────────────────────
 
 
