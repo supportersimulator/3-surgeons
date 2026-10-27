@@ -26,7 +26,13 @@ The integrity check reads `integrity:*` keys from the state backend:
 - `integrity:events_count` vs `integrity:events_count:prev`
 - If current < previous → something decreased a counter → FAIL
 
-Without a state backend, integrity checks are skipped (passes with "skipped" message).
+The check is **fail-closed**: a PASS is only issued when integrity is demonstrated.
+- Required: a state backend, and `integrity:events_count`, `integrity:learnings_count`,
+  `integrity:evidence_grade_sum` present as integers. Missing or malformed -> FAIL.
+- Optional: each counter's `:prev` baseline (absent on first observation -> no comparison),
+  and the evidence-store check (only when an EvidenceStore is supplied).
+
+Every failing check names the condition and a `Recovery:` step; failures are logged at ERROR.
 
 ## Output
 

@@ -1,0 +1,112 @@
+# commit: c5a50d33b3bafab9a6bfb8feaae3d23a838066d1 (tests only, original gates.py)
+# cmd: python -m pytest tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed -v -p no:cacheprovider
+============================= test session starts ==============================
+platform linux -- Python 3.13.5, pytest-9.1.1, pluggy-1.7.0 -- /workspace/3s-failopen-fix/.venv/bin/python
+rootdir: /workspace/3s-failopen-fix
+configfile: pyproject.toml
+plugins: timeout-2.4.0, asyncio-1.4.1, anyio-4.15.1
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 7 items
+
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_absent_state_backend_fails_closed FAILED [ 14%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_missing_required_counter_fails_closed FAILED [ 28%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_malformed_counter_fails_closed FAILED [ 42%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_malformed_prev_counter_fails_closed FAILED [ 57%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_failure_is_logged_loudly FAILED [ 71%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_healthy_integrity_still_passes PASSED [ 85%]
+tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_optional_prev_baseline_absent_still_passes PASSED [100%]
+
+=================================== FAILURES ===================================
+_ TestCorrigibilityGateIntegrityFailClosed.test_absent_state_backend_fails_closed _
+
+self = <tests.test_gates.TestCorrigibilityGateIntegrityFailClosed object at 0x7f6c87e7bd90>
+
+    def test_absent_state_backend_fails_closed(self):
+        """No state backend -> integrity cannot be demonstrated -> FAIL."""
+        gate = CorrigibilityGate(config=Config())
+        result = gate.check_integrity()
+>       assert result.passed is False
+E       AssertionError: assert True is False
+E        +  where True = GateResult(passed=True, checks=[CheckResult(name='integrity_skipped', passed=True, message='No state backend -- integrity checks skipped', critical=False)], summary='INTEGRITY PASS: 1 checks passed', duration_ms=0.0026399993657832965).passed
+
+tests/test_gates.py:387: AssertionError
+_ TestCorrigibilityGateIntegrityFailClosed.test_missing_required_counter_fails_closed _
+
+self = <tests.test_gates.TestCorrigibilityGateIntegrityFailClosed object at 0x7f6c87bfbd90>
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-22/test_missing_required_counter_0')
+
+    def test_missing_required_counter_fails_closed(self, tmp_path):
+        """A required counter absent from state -> FAIL naming that counter."""
+        state = MemoryBackend()
+        _seed_healthy(state)
+        state.delete("integrity:learnings_count")
+        state.delete("integrity:learnings_count:prev")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=Config(), state=state, evidence=evidence)
+        result = gate.check_integrity()
+>       assert result.passed is False
+E       AssertionError: assert True is False
+E        +  where True = GateResult(passed=True, checks=[CheckResult(name='events_monotonic', passed=True, message='events_monotonic: 10 (monotonic OK)', critical=True), CheckResult(name='learnings_preserved', passed=True, message='learnings_preserved: no data yet (OK)', critical=True), CheckResult(name='evidence_grades_preserved', passed=True, message='evidence_grades_preserved: 10 (monotonic OK)', critical=True), CheckResult(name='service_health', passed=True, message='State backend operational', critical=True), CheckResult(name='evidence_operational', passed=True, message='Evidence store: 0 items', critical=True)], summary='INTEGRITY PASS: 5 checks passed', duration_ms=0.22328399973048363).passed
+
+tests/test_gates.py:401: AssertionError
+_ TestCorrigibilityGateIntegrityFailClosed.test_malformed_counter_fails_closed _
+
+self = <tests.test_gates.TestCorrigibilityGateIntegrityFailClosed object at 0x7f6c87c45480>
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-22/test_malformed_counter_fails_c0')
+
+    def test_malformed_counter_fails_closed(self, tmp_path):
+        """A non-integer counter value -> FAIL, never 'defaulting pass'."""
+        state = MemoryBackend()
+        _seed_healthy(state)
+        state.set("integrity:events_count", "not-a-number")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=Config(), state=state, evidence=evidence)
+        result = gate.check_integrity()
+>       assert result.passed is False
+E       assert True is False
+E        +  where True = GateResult(passed=True, checks=[CheckResult(name='events_monotonic', passed=True, message="events_monotonic: parse error (defaulting pass): invalid literal for int() with base 10: 'not-a-number'", critical=True), CheckResult(name='learnings_preserved', passed=True, message='learnings_preserved: 10 (monotonic OK)', critical=True), CheckResult(name='evidence_grades_preserved', passed=True, message='evidence_grades_preserved: 10 (monotonic OK)', critical=True), CheckResult(name='service_health', passed=True, message='State backend operational', critical=True), CheckResult(name='evidence_operational', passed=True, message='Evidence store: 0 items', critical=True)], summary='INTEGRITY PASS: 5 checks passed', duration_ms=0.23383199913951103).passed
+
+tests/test_gates.py:415: AssertionError
+_ TestCorrigibilityGateIntegrityFailClosed.test_malformed_prev_counter_fails_closed _
+
+self = <tests.test_gates.TestCorrigibilityGateIntegrityFailClosed object at 0x7f6c87c456e0>
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-22/test_malformed_prev_counter_fa0')
+
+    def test_malformed_prev_counter_fails_closed(self, tmp_path):
+        """A malformed :prev baseline is also unverifiable -> FAIL."""
+        state = MemoryBackend()
+        _seed_healthy(state)
+        state.set("integrity:evidence_grade_sum:prev", "1.5x")
+        evidence = EvidenceStore(str(tmp_path / "ev.db"))
+        gate = CorrigibilityGate(config=Config(), state=state, evidence=evidence)
+        result = gate.check_integrity()
+>       assert result.passed is False
+E       assert True is False
+E        +  where True = GateResult(passed=True, checks=[CheckResult(name='events_monotonic', passed=True, message='events_monotonic: 10 (monotonic OK)', critical=True), CheckResult(name='learnings_preserved', passed=True, message='learnings_preserved: 10 (monotonic OK)', critical=True), CheckResult(name='evidence_grades_preserved', passed=True, message="evidence_grades_preserved: parse error (defaulting pass): invalid literal for int() with base 10: '1.5x'", critical=True), CheckResult(name='service_health', passed=True, message='State backend operational', critical=True), CheckResult(name='evidence_operational', passed=True, message='Evidence store: 0 items', critical=True)], summary='INTEGRITY PASS: 5 checks passed', duration_ms=0.19197599976905622).passed
+
+tests/test_gates.py:429: AssertionError
+____ TestCorrigibilityGateIntegrityFailClosed.test_failure_is_logged_loudly ____
+
+self = <tests.test_gates.TestCorrigibilityGateIntegrityFailClosed object at 0x7f6c87c04290>
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-22/test_failure_is_logged_loudly0')
+caplog = <_pytest.logging.LogCaptureFixture object at 0x7f6c87856f90>
+
+    def test_failure_is_logged_loudly(self, tmp_path, caplog):
+        """A failed integrity verdict is emitted at ERROR level (fail out loud)."""
+        import logging
+    
+        gate = CorrigibilityGate(config=Config())
+        with caplog.at_level(logging.ERROR, logger="three_surgeons.core.gates"):
+            result = gate.check_integrity()
+>       assert result.passed is False
+E       AssertionError: assert True is False
+E        +  where True = GateResult(passed=True, checks=[CheckResult(name='integrity_skipped', passed=True, message='No state backend -- integrity checks skipped', critical=False)], summary='INTEGRITY PASS: 1 checks passed', duration_ms=0.002115000825142488).passed
+
+tests/test_gates.py:440: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_absent_state_backend_fails_closed
+FAILED tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_missing_required_counter_fails_closed
+FAILED tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_malformed_counter_fails_closed
+FAILED tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_malformed_prev_counter_fails_closed
+FAILED tests/test_gates.py::TestCorrigibilityGateIntegrityFailClosed::test_failure_is_logged_loudly
+========================= 5 failed, 2 passed in 0.17s ==========================

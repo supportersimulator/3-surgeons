@@ -1,0 +1,16 @@
+# baseline @ 75415cc
+1733 passed, 10 skipped, 486 warnings in 18.55s
+# after fix @ 7cc9a1a
+1740 passed, 10 skipped, 486 warnings in 18.43s
+
+# skips (identical before/after):
+SKIPPED [1] tests/test_llm_integration.py:91: Context_DNA_OPENAI not set
+SKIPPED [1] tests/test_llm_integration.py:97: Context_DNA_OPENAI not set
+SKIPPED [1] tests/test_llm_integration.py:112: Context_DNA_OPENAI not set
+SKIPPED [1] tests/test_llm_integration.py:132: Context_DNA_Deepseek not set
+SKIPPED [1] tests/test_llm_integration.py:138: Context_DNA_Deepseek not set
+SKIPPED [1] tests/test_llm_integration.py:150: Context_DNA_Deepseek not set
+SKIPPED [1] tests/test_llm_integration.py:170: MLX server not running on port 5044
+SKIPPED [1] tests/test_llm_integration.py:175: MLX server not running on port 5044
+SKIPPED [1] tests/test_llm_integration.py:188: MLX server not running on port 5044
+SKIPPED [1] tests/test_llm_integration.py:210: Context_DNA_OPENAI not set
