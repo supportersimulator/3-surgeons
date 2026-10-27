@@ -407,8 +407,9 @@ class TestGainsGateExpanded:
         assert gpu_check.passed is False
 
     def test_critical_findings_check_zero(self, tmp_path):
-        """Critical findings check passes when count is 0."""
+        """Critical findings check passes when a verified counter is 0."""
         state = MemoryBackend()
+        state.set("critical_findings:count", "0")
         evidence = EvidenceStore(str(tmp_path / "ev.db"))
         config = Config()
         config.gates.gains_gate_checks = ["critical_findings"]
