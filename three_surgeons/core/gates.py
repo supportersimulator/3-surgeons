@@ -9,6 +9,7 @@ corrigibility-gate.sh -- Python rewrite with configurable checks.
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -319,30 +320,45 @@ class GainsGate:
             )
 
     def _check_critical_findings(self) -> CheckResult:
-        """Check for unresolved critical findings. Critical -- must be 0."""
+        """Check unresolved critical findings; unknown counts must block."""
+        key = "critical_findings:count"
         try:
-            count_str = self._state.get("critical_findings:count")
-            count = int(count_str) if count_str is not None else 0
-            if count == 0:
-                return CheckResult(
-                    name="critical_findings",
-                    passed=True,
-                    message="No unresolved critical findings",
-                    critical=True,
-                )
+            count_str = self._state.get(key)
+            if count_str is None:
+                raise ValueError("required counter is absent")
+            count = int(count_str)
+            if count < 0:
+                raise ValueError(f"counter cannot be negative ({count})")
+        except Exception as exc:
+            # A read error, absent key, or malformed counter is not evidence
+            # that the number of unresolved critical findings is zero.
+            logging.getLogger(__name__).error(
+                "GainsGate critical_findings cannot verify %s: %s", key, exc
+            )
             return CheckResult(
                 name="critical_findings",
                 passed=False,
-                message=f"{count} unresolved critical findings",
+                message=(
+                    f"Cannot verify required {key}: {type(exc).__name__}: {exc}. "
+                    "Recovery: restore the state backend and populate the "
+                    "counter from authoritative unresolved findings; rerun the gate."
+                ),
                 critical=True,
             )
-        except Exception as exc:
+
+        if count == 0:
             return CheckResult(
                 name="critical_findings",
                 passed=True,
-                message=f"Critical findings check error (defaulting pass): {exc}",
+                message="No unresolved critical findings",
                 critical=True,
             )
+        return CheckResult(
+            name="critical_findings",
+            passed=False,
+            message=f"{count} unresolved critical findings",
+            critical=True,
+        )
 
 
 # ── CardioGate ────────────────────────────────────────────────────────
